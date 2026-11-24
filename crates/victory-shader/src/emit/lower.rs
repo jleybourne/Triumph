@@ -38,6 +38,8 @@ pub(crate) struct Lowered {
     pub stride_table: bool,
     /// Root parameters whose descriptor the shader reads as numbers.
     pub descriptor_data: Vec<u8>,
+    /// Root constants holding scalar memory the shader reads.
+    pub scalar_data: Vec<u8>,
     pub user_data: Vec<UserData>,
     pub samplers: Vec<[u32; 4]>,
     /// Heap handles made with a non-uniform index.
@@ -955,6 +957,7 @@ impl<'a> Lower<'a> {
             root_srvs,
             stride_table,
             descriptor_data: self.s.descriptor_data.clone(),
+            scalar_data: self.s.scalar_data.clone(),
             #[cfg(test)]
             nonuniform_handles: self.s.nonuniform_handles,
             #[cfg(test)]
@@ -3078,6 +3081,126 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+
+    /// Scalar memory the title wrote itself: its address came in a root
+    /// constant, so the host can read those words and publish them
+    /// ([`SCALAR_DATA_SPACE`]) where the console read scalar memory.
+    fn scalar_memory(&mut self, inst: &Inst, site: Site) -> Result<(), Why> {
+        let Fields::Smem {
+            data: Some(Operand::Scalar { code, .. }),
+            offset,
+            ..
+        } = inst.fields
+        else {
+            return Err("a scalar memory read without a scalar register");
+        };
+        let count = match inst.name().strip_prefix("s_load_dword") {
+            Some("") => 1u32,
+            Some("x2") => 2,
+            Some("x4") => 4,
+            Some("x8") => 8,
+            Some("x16") => 16,
+            _ => return Err("a scalar memory read of another opcode"),
+        };
+        let Some(param) = self.scalar.get(&site).map(|a| a.param) else {
+            return Err("a scalar memory address from no root parameter");
+        };
+        if param == CODE {
+            return Err("a scalar memory read as data");
+        }
+        let entry = match self.s.scalar_data.iter().position(|&p| p == param as u8) {
+            Some(n) => n,
+            None => {
+                self.s.scalar_data.push(param as u8);
+                self.s.scalar_data.len() - 1
+            }
+        };
+        let c = self.cur;
+        let table = self.s.scalar_data_handle();
+        let at_word = (offset as u32) / 4;
+        let iu = self.s.m.undef(self.s.t.i32);
+        let mask = self.s.m.i8(3);
+        let align = self.s.m.i32(4);
+        for k in 0..count {
+            let rel = entry as u32 * super::SCALAR_DATA_WORDS + at_word + k;
+            let idx = self.s.m.i32(rel as i32 as u32);
+            let bytes = self.s.m.i32(4);
+            let addr = self.s.m.bin(c, Bin::Mul, idx, bytes);
+            let res = self.s.op(
+                c,
+                "rawBufferLoad.f32",
+                Attr::ReadOnly,
+                self.s.t.res_ret,
+                139,
+                &[table, addr, iu, mask, align],
+            );
+            let x = self.s.m.extract(c, res, 0);
+            let x = self.as_int(x);
+            self.write(inst, Reg::S(code + k as u8), x, None);
+        }
+        Ok(())
+    }
+
+
+    /// The descriptor's own dwords, published by the host
+    /// ([`super::DESC_DATA_SPACE`]) because no use names a view whose size,
+    /// stride or count could be synthesised instead.
+    fn descriptor_words(&mut self, inst: &Inst, site: Site) -> Result<(), Why> {
+        let Fields::Smem {
+            data: Some(Operand::Scalar { code, .. }),
+            offset,
+            ..
+        } = inst.fields
+        else {
+            return Err("a descriptor read only as data");
+        };
+        let count = match inst.name().strip_prefix("s_load_dword") {
+            Some("") => 1u32,
+            Some("x2") => 2,
+            Some("x4") => 4,
+            Some("x8") => 8,
+            Some("x16") => 16,
+            _ => return Err("a descriptor read only as data"),
+        };
+        let Some(param) = self.scalar.get(&site).map(|a| a.param) else {
+            return Err("a descriptor read only as data");
+        };
+        if param == CODE {
+            return Err("a descriptor read only as data");
+        }
+        let entry = match self.s.descriptor_data.iter().position(|&p| p == param as u8) {
+            Some(n) => n,
+            None => {
+                self.s.descriptor_data.push(param as u8);
+                self.s.descriptor_data.len() - 1
+            }
+        };
+        let c = self.cur;
+        let table = self.s.descriptor_data_handle();
+        let at_word = (offset as u32) / 4;
+        let iu = self.s.m.undef(self.s.t.i32);
+        let mask = self.s.m.i8(3);
+        let align = self.s.m.i32(4);
+        for k in 0..count {
+            let rel = entry as u32 * super::DESC_DATA_WORDS + at_word + k;
+            let idx = self.s.m.i32(rel as i32 as u32);
+            let bytes = self.s.m.i32(4);
+            let addr = self.s.m.bin(c, Bin::Mul, idx, bytes);
+            let res = self.s.op(
+                c,
+                "rawBufferLoad.f32",
+                Attr::ReadOnly,
+                self.s.t.res_ret,
+                139,
+                &[table, addr, iu, mask, align],
+            );
+            let x = self.s.m.extract(c, res, 0);
+            let x = self.as_int(x);
+            self.write(inst, Reg::S(code + k as u8), x, None);
+        }
+        Ok(())
+    }
+
     /// A descriptor load (`s_load_dword*` from a table or heap) whose dwords
     /// the code also reads as numbers: the console compiler computes sizes
     /// from descriptor bits (an image's width, height, depth, levels; a
@@ -3097,7 +3220,7 @@ impl<'a> Lower<'a> {
             ..
         } = inst.fields
         else {
-            return Err("a scalar memory read as data");
+            return self.scalar_memory(inst, site);
         };
         let count = match inst.name().strip_prefix("s_load_dword") {
             Some("") => 1u32,
@@ -3105,7 +3228,7 @@ impl<'a> Lower<'a> {
             Some("x4") => 4,
             Some("x8") => 8,
             Some("x16") => 16,
-            _ => return Err("a scalar memory read as data"),
+            _ => return self.scalar_memory(inst, site),
         };
         // How the program uses the descriptor tells the view's kind.
         let use_at = self
@@ -3121,58 +3244,7 @@ impl<'a> Lower<'a> {
                 })
             });
         let Some((at, first)) = use_at else {
-            // Read only as numbers: no use names a view to ask for the size,
-            // stride or count the code computes from. The host publishes the
-            // descriptor's own dwords through [`super::DESC_DATA_SPACE`], eight
-            // per entry, and the load reads them where the console read the
-            // descriptor's memory.
-            let Some(param) = self.scalar.get(&site).map(|a| a.param) else {
-                return Err("a descriptor read only as data");
-            };
-            if param == CODE {
-                return Err("a descriptor read only as data");
-            }
-            let entry = match self.s.descriptor_data.iter().position(|&p| p == param as u8) {
-                Some(n) => n,
-                None => {
-                    self.s.descriptor_data.push(param as u8);
-                    self.s.descriptor_data.len() - 1
-                }
-            };
-            let c = self.cur;
-            let table = self.s.descriptor_data_handle();
-            let base = self.s.m.i32((entry as u32 * super::DESC_DATA_WORDS) as i32 as u32);
-            // The load's own dword offset inside the descriptor.
-            let at_word: u32 = match inst.fields {
-                Fields::Smem { offset, .. } => (offset as u32) / 4,
-                _ => 0,
-            };
-            let iu = self.s.m.undef(self.s.t.i32);
-            let mask = self.s.m.i8(3);
-            let align = self.s.m.i32(4);
-            for k in 0..count {
-                let rel = k + at_word;
-                let idx = if rel == 0 {
-                    base
-                } else {
-                    let kk = self.s.m.i32(rel);
-                    self.s.m.bin(c, Bin::Add, base, kk)
-                };
-                let bytes = self.s.m.i32(4);
-                let addr = self.s.m.bin(c, Bin::Mul, idx, bytes);
-                let res = self.s.op(
-                    c,
-                    "rawBufferLoad.f32",
-                    Attr::ReadOnly,
-                    self.s.t.res_ret,
-                    139,
-                    &[table, addr, iu, mask, align],
-                );
-                let x = self.s.m.extract(c, res, 0);
-                let x = self.as_int(x);
-                self.write(inst, Reg::S(code + k as u8), x, None);
-            }
-            return Ok(());
+            return self.descriptor_words(inst, site);
         };
         let src = Source::Loaded { load: site, first };
         let used = self.used_kind(&src);
@@ -3210,7 +3282,9 @@ impl<'a> Lower<'a> {
                 }
                 (props, None)
             }
-            _ => return Err("a scalar memory read as data"),
+            // A use we cannot classify as an image or a buffer read: the
+            // code only wants the descriptor's numbers, so publish them.
+            _ => return self.descriptor_words(inst, site),
         };
         let h = self.handle(site, &src, false, props)?;
         let c = self.cur;

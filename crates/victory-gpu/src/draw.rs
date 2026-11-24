@@ -568,6 +568,37 @@ impl State {
                     }
                 }
             }
+            if let Some((param, params)) = &stage.scalar_data {
+                if self.heaps[0] == 0 {
+                    once!("a shader reads scalar memory without a host view heap");
+                    return false;
+                }
+                let Some(heap) = crate::descriptor::heap(self.heaps[0] as This).host() else {
+                    once!("a shader reads scalar memory without a host view heap");
+                    return false;
+                };
+                // The address is a root constant: read it, then publish the
+                // title's own words from there.
+                for (n, &rp) in params.iter().enumerate() {
+                    let lo = u64::from(self.user_value(compute, rp, RootType::Constants, 0));
+                    let hi = u64::from(self.user_value(compute, rp, RootType::Constants, 1));
+                    let addr = lo | (hi << 32);
+                    let Some(words) = crate::shadow::peek(addr, 64) else { continue };
+                    heap.set_scalar_words(n as u32, &words);
+                }
+                let Some(gpu) = heap.scalar_data_gpu() else {
+                    once!("scalar data table unavailable");
+                    return false;
+                };
+                // SAFETY: an open list; the table lives with the host heap.
+                unsafe {
+                    if compute {
+                        l.SetComputeRootShaderResourceView(*param, gpu);
+                    } else {
+                        l.SetGraphicsRootShaderResourceView(*param, gpu);
+                    }
+                }
+            }
             if let Some(param) = stage.stride_table {
                 let gpu = (self.heaps[0] != 0)
                     .then(|| crate::descriptor::heap(self.heaps[0] as This).host())

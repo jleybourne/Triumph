@@ -263,6 +263,9 @@ pub(crate) struct Stage {
     /// Root parameter of the descriptor-data table (`t0`, [`DESC_DATA_SPACE`]),
     /// and the parameters it publishes, in order.
     pub(crate) descriptor_data: Option<(u32, Vec<u8>)>,
+    /// Root parameter of the scalar-data table (`t0`, [`SCALAR_DATA_SPACE`]),
+    /// and the root constants whose addresses it publishes.
+    pub(crate) scalar_data: Option<(u32, Vec<u8>)>,
 }
 
 impl Stage {
@@ -356,6 +359,7 @@ impl HostPipeline {
                 root_srvs: Vec::new(),
                 stride_table: None,
                 descriptor_data: None,
+                scalar_data: None,
             };
             let dwords = t.user_data_dwords();
             if dwords > 0 {

@@ -237,6 +237,10 @@ fn encode(s: &HostShader) -> Vec<u8> {
     for &p in &s.descriptor_data {
         word(&mut out, u32::from(p));
     }
+    word(&mut out, s.scalar_data.len() as u32);
+    for &p in &s.scalar_data {
+        word(&mut out, u32::from(p));
+    }
     out
 }
 
@@ -299,6 +303,11 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
     for _ in 0..n {
         descriptor_data.push(r.word()? as u8);
     }
+    let n = r.word()? as usize;
+    let mut scalar_data = Vec::with_capacity(n);
+    for _ in 0..n {
+        scalar_data.push(r.word()? as u8);
+    }
     r.0.is_empty().then_some(HostShader {
         stage,
         dxil,
@@ -309,6 +318,7 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
         root_srvs,
         stride_table,
         descriptor_data,
+        scalar_data,
     })
 }
 

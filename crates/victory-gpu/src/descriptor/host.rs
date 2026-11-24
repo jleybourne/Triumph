@@ -40,6 +40,8 @@ pub(crate) struct HostHeap {
     strides: Option<StrideTable>,
     /// Descriptor dwords published for shaders that read them as numbers.
     desc_data: Option<DescTable>,
+    /// Scalar memory published for shaders that read it.
+    scalar_data: Option<DescTable>,
     /// The title address each slot was last mirrored from.
     addresses: Mutex<Vec<u64>>,
     /// The first of the [`ALIASES`] slots after the dynamic ones (view
@@ -127,6 +129,19 @@ impl StrideTable {
     }
 }
 
+fn write_words(table: Option<&DescTable>, entry: u32, words: &[u32]) {
+    let Some(t) = table else { return };
+    if entry >= t.len {
+        return;
+    }
+    let n = words.len().min(t.words as usize);
+    // SAFETY: the entry lies in the mapped upload buffer.
+    unsafe {
+        let p = (t.ptr as *mut u32).add(entry as usize * t.words as usize);
+        std::ptr::copy_nonoverlapping(words.as_ptr(), p, n);
+    }
+}
+
 /// The descriptor dwords the host publishes to shaders that read a descriptor
 /// as numbers: [`crate::pipeline::DESC_DATA_WORDS`] dwords per entry, one entry
 /// per root parameter the shader asked about.
@@ -135,11 +150,12 @@ struct DescTable {
     ptr: usize,
     gpu: u64,
     len: u32,
+    words: u32,
 }
 
 impl DescTable {
-    fn new(device: &ID3D12Device, len: u32) -> Option<Self> {
-        let bytes = (u64::from(len) * 8 * 4).max(8);
+    fn new(device: &ID3D12Device, len: u32, words: u32) -> Option<Self> {
+        let bytes = (u64::from(len) * u64::from(words) * 4).max(8);
         let desc = D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
             Width: bytes,
@@ -172,7 +188,7 @@ impl DescTable {
             std::ptr::write_bytes(p.cast::<u8>(), 0, bytes as usize);
             res.GetGPUVirtualAddress()
         };
-        Some(Self { _resource: resource?, ptr: p as usize, gpu, len })
+        Some(Self { _resource: resource?, ptr: p as usize, gpu, len, words })
     }
 }
 
@@ -326,7 +342,8 @@ impl HostHeap {
             u64::from(step),
             sampler,
         ));
-        let desc_data = if sampler { None } else { DescTable::new(&host.device, 64) };
+        let desc_data = if sampler { None } else { DescTable::new(&host.device, 64, 8) };
+        let scalar_data = if sampler { None } else { DescTable::new(&host.device, 32, 64) };
         let addresses = Mutex::new(vec![0u64; count as usize]);
         let strides = if sampler {
             None
@@ -345,6 +362,7 @@ impl HostHeap {
             next: Mutex::new((0, vec![false; extra as usize])),
             strides,
             desc_data,
+            scalar_data,
             addresses,
             alias_base: count + extra,
             aliases: Mutex::new(Aliases {
@@ -595,14 +613,16 @@ impl HostHeap {
     }
 
     pub(crate) fn set_descriptor_words(&self, entry: u32, words: &[u32; 8]) {
-        let Some(t) = &self.desc_data else { return };
-        if entry >= t.len {
-            return;
-        }
-        // SAFETY: the entry lies in the mapped upload buffer.
-        unsafe {
-            (t.ptr as *mut [u32; 8]).add(entry as usize).write(*words);
-        }
+        write_words(self.desc_data.as_ref(), entry, words);
+    }
+
+    /// Where the host publishes scalar memory, and a writer for one entry.
+    pub(crate) fn scalar_data_gpu(&self) -> Option<u64> {
+        self.scalar_data.as_ref().map(|t| t.gpu)
+    }
+
+    pub(crate) fn set_scalar_words(&self, entry: u32, words: &[u32]) {
+        write_words(self.scalar_data.as_ref(), entry, words);
     }
 
     pub(crate) fn mirror(&self, index: u32, handle: u64, for_draw: bool) -> Option<View> {

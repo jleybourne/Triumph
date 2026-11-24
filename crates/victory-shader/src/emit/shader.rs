@@ -48,6 +48,14 @@ pub const DESC_DATA_SPACE: u32 = 3;
 /// (size, levels, depth) live in the first five.
 pub const DESC_DATA_WORDS: u32 = 8;
 
+/// Scalar memory the title wrote itself (not a descriptor) and whose address
+/// it passed in a root constant: the host publishes those words per draw and
+/// the shader reads them where the console read scalar memory.
+pub const SCALAR_DATA_SPACE: u32 = 4;
+
+/// Dwords published per scalar-memory entry.
+pub const SCALAR_DATA_WORDS: u32 = 64;
+
 /// What the host writes per view-heap slot in the runtime stride table, for
 /// buffers a shader reads without a stride known when it was translated.
 ///
@@ -177,8 +185,13 @@ pub(crate) struct Shader {
     /// Root parameters whose descriptor the shader reads as numbers, in the
     /// order the host publishes them ([`DESC_DATA_SPACE`]).
     pub descriptor_data: Vec<u8>,
+    /// Root constants holding the address of scalar memory the shader reads
+    /// ([`SCALAR_DATA_SPACE`]), in publication order.
+    pub scalar_data: Vec<u8>,
     /// Its handle, made once.
     descriptor_data_handle: Option<V>,
+    /// Its handle, made once.
+    scalar_data_handle: Option<V>,
     pub flags: u64,
     /// Heap handles made with a non-uniform index.
     pub nonuniform_handles: u32,
@@ -249,6 +262,8 @@ impl Shader {
             stride_table: None,
             descriptor_data: Vec::new(),
             descriptor_data_handle: None,
+            scalar_data: Vec::new(),
+            scalar_data_handle: None,
             flags: 0,
             nonuniform_handles: 0,
             threads: None,
@@ -404,6 +419,28 @@ impl Shader {
             &[bind, z, f],
         );
         self.descriptor_data_handle = Some(h);
+        h
+    }
+
+    /// The handle of the host's scalar-data table ([`SCALAR_DATA_SPACE`]).
+    pub fn scalar_data_handle(&mut self) -> V {
+        if let Some(h) = self.scalar_data_handle {
+            return h;
+        }
+        let z = self.m.i32(0);
+        let bind = [z, z, self.m.i32(SCALAR_DATA_SPACE), self.m.i8(0)];
+        let bind = self.m.aggregate(self.t.bind, &bind);
+        let f = self.m.bool(false);
+        let block = self.entry;
+        let h = self.op(
+            block,
+            "createHandleFromBinding",
+            Attr::ReadNone,
+            self.t.handle,
+            217,
+            &[bind, z, f],
+        );
+        self.scalar_data_handle = Some(h);
         h
     }
 

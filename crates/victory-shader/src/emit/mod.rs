@@ -98,7 +98,7 @@ use crate::{ShaderError, io, ir, resource, structure};
 
 pub use sampler::StaticSampler;
 pub use shader::{
-    DESC_DATA_SPACE, DESC_DATA_WORDS, ROOT_CBV_SPACE, RawWindow, SAMPLER_SPACE, STRIDE_SPACE, StrideEntry,
+    DESC_DATA_SPACE, DESC_DATA_WORDS, ROOT_CBV_SPACE, SCALAR_DATA_SPACE, SCALAR_DATA_WORDS, RawWindow, SAMPLER_SPACE, STRIDE_SPACE, StrideEntry,
     USER_DATA_SPACE,
 };
 
@@ -166,6 +166,8 @@ pub struct HostShader {
     /// publishes those descriptors' dwords through [`DESC_DATA_SPACE`], eight
     /// per entry, in this order.
     pub descriptor_data: Vec<u8>,
+    /// Root constants holding the address of scalar memory the shader reads.
+    pub scalar_data: Vec<u8>,
 }
 
 impl HostShader {
@@ -320,6 +322,7 @@ pub fn emit(
         root_srvs: l.root_srvs,
         stride_table: l.stride_table,
         descriptor_data: l.descriptor_data,
+        scalar_data: l.scalar_data,
     })
 }
 
