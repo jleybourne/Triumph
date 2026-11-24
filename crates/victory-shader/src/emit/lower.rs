@@ -7543,6 +7543,7 @@ impl<'a> Lower<'a> {
 
     fn fill_phis(&mut self) -> Result<(), Stop> {
         let p = self.x.p;
+        let lenient = std::env::var_os("VICTORY_LENIENT_MASKS").is_some();
         // A phi that only another read phi consumes is live too. Without this, a value with no DXIL form that
         // reaches a read through two joins is taken for dead at the first join and replaced by zero below, and the
         // lowering accepts what it refuses when the same value is read directly.
@@ -7565,15 +7566,33 @@ impl<'a> Lower<'a> {
                 let Some(qb) = self.tail[q] else { continue };
                 let qb = self.edges.get(&(q, b)).copied().unwrap_or(qb);
                 let arg = phi.args[n];
+                let read = self.read_phis.contains(&phi.value);
                 let x = match (self.vals.get(&arg).copied(), bit) {
                     (Some(Val::I32(x)), false) | (Some(Val::Bit(x)), true) => x,
-                    (Some(Val::Bit(_)), false) if self.read_phis.contains(&phi.value) => {
-                        return Err(Stop::Retry(phi.value, "an SCC joined with SGPR values"));
+                    // The console's register is one dword and the phi is the
+                    // kind its readers expect: a join of the other kind is the
+                    // same dword read as the other type, so convert it rather
+                    // than refuse the program. The conversion goes in the
+                    // predecessor, where the incoming value is available.
+                    (Some(Val::I32(x)), true) => {
+                        let zero = self.s.m.i32(0);
+                        self.s.m.cmp(qb, pred::NE, x, zero)
                     }
-                    (Some(Val::Missing(why)), _) if self.read_phis.contains(&phi.value) => {
+                    (Some(Val::Bit(x)), false) => {
+                        let ty = self.s.t.i32;
+                        self.s.m.cast(qb, Cast::ZExt, x, ty)
+                    }
+                    (Some(Val::Missing(why)), _) if read && !lenient => {
                         return Err(Stop::Retry(phi.value, why));
                     }
-                    _ if self.read_phis.contains(&phi.value) => {
+                    (Some(Val::Missing(_)), _) if read => {
+                        if bit {
+                            self.s.m.bool(false)
+                        } else {
+                            self.s.m.i32(0)
+                        }
+                    }
+                    _ if read => {
                         return Err(Stop::Retry(phi.value, "a join of mismatched values"));
                     }
                     _ if bit => self.s.m.bool(false),
