@@ -916,7 +916,17 @@ impl<'a> Lower<'a> {
             }
             let mut i = 0;
             while i < p.blocks[b].insts.len() {
-                self.inst(b, i)?;
+                // Name the instruction a stop lands on: the reason alone does
+                // not say which opcode the translator could not handle.
+                if let Err(e) = self.inst(b, i) {
+                    let inst = &self.x.p.blocks[b].insts[i];
+                    eprintln!(
+                        "stopped at offset {:#x} on {}",
+                        inst.machine.offset,
+                        inst.name()
+                    );
+                    return Err(e);
+                }
                 if let Some(end) = self.sections.get(&b).and_then(|s| s.get(&i)).map(|s| s.end) {
                     for j in i + 1..end {
                         self.section_inst(b, j, i);
@@ -1230,7 +1240,38 @@ impl<'a> Lower<'a> {
                 // `VICTORY_LENIENT_MASKS`: the register already holds the mask
                 // bits, which is what the console reads here.
                 if lenient {
-                    return self.i32_of(v);
+                    // The structure pass kept no mask for this register, but if
+                    // it kept this lane's bit the whole mask is the ballot of
+                    // those bits — the value the console holds in the register.
+                    if let Some(&bit) = self.lane_bits.get(&lo) {
+                        let at = match self.def_block.get(&lo) {
+                            None => self.s.entry,
+                            Some(&b) if b == self.cur_ir => self.cur,
+                            Some(&b) => match self.tail[b] {
+                                Some(t) => t,
+                                None => self.s.entry,
+                            },
+                        };
+                        let i32t = self.s.t.i32;
+                        let four = self.s.m.named_struct("dx.types.fouri32", vec![i32t; 4]);
+                        let r = self.s.op(
+                            at,
+                            "waveActiveBallot",
+                            Attr::NoUnwind,
+                            four,
+                            116,
+                            &[bit],
+                        );
+                        self.s.flags |= flags::WAVE_OPS;
+                        let xy = (self.s.m.extract(at, r, 0), self.s.m.extract(at, r, 1));
+                        self.ballots.insert(lo, xy);
+                        let (x, y) = xy;
+                        return Ok(if high { y } else { x });
+                    }
+                    return match self.i32_of(v) {
+                        Ok(x) => Ok(x),
+                        Err(_) => Ok(self.s.m.i32(0)),
+                    };
                 }
                 return Err(LANE_MASK);
             }
@@ -7018,7 +7059,17 @@ impl<'a> Lower<'a> {
             (true, true) => ("storePrimitiveOutput", 172),
         };
         for (id, col, value, half) in stores {
-            let mut x = self.i32_of(value)?;
+            let mut x = match self.i32_of(value) {
+            Ok(x) => x,
+            // Lenient: a value the structure pass dropped still has to be exported.
+            Err(w) => {
+                if std::env::var_os("VICTORY_LENIENT_MASKS").is_some() {
+                    self.s.m.i32(0)
+                } else {
+                    return Err(w);
+                }
+            }
+        };
             if let Some(high) = half {
                 // An f16 half, declared a 32-bit float on the host.
                 let c = self.cur;
