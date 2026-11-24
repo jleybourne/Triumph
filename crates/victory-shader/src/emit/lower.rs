@@ -6063,9 +6063,6 @@ impl<'a> Lower<'a> {
             return Err("an image access with tfe or lwe");
         }
         let name = inst.name();
-        if *a16 && name.starts_with("image_sample_b") {
-            return Err("a biased image sample with 16-bit coordinates");
-        }
         // A load or sample with no channel enabled returns the first.
         let dmask = if *dmask == 0 { &1 } else { dmask };
         let site = (b, i);
@@ -6490,7 +6487,8 @@ impl<'a> Lower<'a> {
                 }
                 61 => {
                     let bias = addr_val(self, 0)?;
-                    let bias = self.as_float(bias);
+                    // With a16 the bias is f16 like the coordinates.
+                    let bias = to_float(self, bias);
                     args.extend(&os);
                     args.extend([bias, clamp]);
                     self.s.op(
