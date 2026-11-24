@@ -229,6 +229,8 @@ struct Builder {
     pipelines: Vec<Arc<make::Pending>>,
     /// Every one of `pipelines` has a host pipeline.
     whole: bool,
+    /// Frames between rebuilds (`VICTORY_BVH_EVERY`).
+    every: std::sync::OnceLock<u64>,
     /// One could not be made.
     off: bool,
 }
@@ -237,6 +239,7 @@ struct Builder {
 static BUILDER: Mutex<Builder> = Mutex::new(Builder {
     pipelines: Vec::new(),
     whole: false,
+    every: std::sync::OnceLock::new(),
     off: false,
 });
 
@@ -299,6 +302,25 @@ pub(crate) fn builder_runs() -> bool {
         return false;
     }
     if b.whole {
+        // The build walks the title's own structures, so it is not free:
+        // `VICTORY_BVH_EVERY=<n>` rebuilds only every nth frame (default 1)
+        // to tell a build that costs seconds from the shading that reads it.
+        let every = b.every.get_or_init(|| {
+            std::env::var("VICTORY_BVH_EVERY")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(1)
+        });
+        if *every > 1 {
+            let frame = crate::queue::presented();
+            static BUILT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+            let last = BUILT.load(std::sync::atomic::Ordering::Relaxed);
+            if last != u64::MAX && frame.saturating_sub(last) < *every {
+                return false;
+            }
+            BUILT.store(frame, std::sync::atomic::Ordering::Relaxed);
+        }
         return true;
     }
     let missing = b.pipelines.iter().filter(|p| !make::now(p)).count();
