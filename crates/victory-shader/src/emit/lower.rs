@@ -3086,6 +3086,9 @@ impl<'a> Lower<'a> {
     /// constant, so the host can read those words and publish them
     /// ([`SCALAR_DATA_SPACE`]) where the console read scalar memory.
     fn scalar_memory(&mut self, inst: &Inst, site: Site) -> Result<(), Why> {
+        if std::env::var_os("VICTORY_DESCTABLE").is_none() {
+            return Err("a scalar memory read as data");
+        }
         let Fields::Smem {
             data: Some(Operand::Scalar { code, .. }),
             offset,
@@ -3122,7 +3125,8 @@ impl<'a> Lower<'a> {
         let mask = self.s.m.i8(3);
         let align = self.s.m.i32(4);
         for k in 0..count {
-            let rel = entry as u32 * super::SCALAR_DATA_WORDS + at_word + k;
+            let within = (at_word + k).min(super::SCALAR_DATA_WORDS - 1);
+            let rel = entry as u32 * super::SCALAR_DATA_WORDS + within;
             let idx = self.s.m.i32(rel as i32 as u32);
             let bytes = self.s.m.i32(4);
             let addr = self.s.m.bin(c, Bin::Mul, idx, bytes);
@@ -3146,6 +3150,9 @@ impl<'a> Lower<'a> {
     /// ([`super::DESC_DATA_SPACE`]) because no use names a view whose size,
     /// stride or count could be synthesised instead.
     fn descriptor_words(&mut self, inst: &Inst, site: Site) -> Result<(), Why> {
+        if std::env::var_os("VICTORY_DESCTABLE").is_none() {
+            return Err("a descriptor read only as data");
+        }
         let Fields::Smem {
             data: Some(Operand::Scalar { code, .. }),
             offset,
@@ -3182,7 +3189,11 @@ impl<'a> Lower<'a> {
         let mask = self.s.m.i8(3);
         let align = self.s.m.i32(4);
         for k in 0..count {
-            let rel = entry as u32 * super::DESC_DATA_WORDS + at_word + k;
+            // Stay inside the entry: a title load can name a dword past the
+            // eight the descriptor has, and an out-of-bounds read faults the
+            // device.
+            let within = (at_word + k).min(super::DESC_DATA_WORDS - 1);
+            let rel = entry as u32 * super::DESC_DATA_WORDS + within;
             let idx = self.s.m.i32(rel as i32 as u32);
             let bytes = self.s.m.i32(4);
             let addr = self.s.m.bin(c, Bin::Mul, idx, bytes);

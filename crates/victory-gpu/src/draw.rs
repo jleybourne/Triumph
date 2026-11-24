@@ -547,9 +547,28 @@ impl State {
                 // Publish each parameter's descriptor: the title's own dwords,
                 // read from the memory it mirrored the slot from.
                 for (n, &rp) in params.iter().enumerate() {
+                    // Either a heap index (a table root) or a 64-bit address
+                    // passed in root constants: take whichever the title set.
                     let index = self.user_value(compute, rp, RootType::Table, 0);
-                    let Some(addr) = heap.slot_address(index) else { continue };
+                    let addr = heap.slot_address(index).or_else(|| {
+                        let lo = u64::from(self.user_value(compute, rp, RootType::Constants, 0));
+                        let hi = u64::from(self.user_value(compute, rp, RootType::Constants, 1));
+                        let a = lo | (hi << 32);
+                        (a != 0).then_some(a)
+                    });
+                    let Some(addr) = addr else { continue };
                     let Some(words) = crate::shadow::peek(addr, 8) else { continue };
+                    {
+                        static N: std::sync::atomic::AtomicU32 =
+                            std::sync::atomic::AtomicU32::new(0);
+                        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n < 24 {
+                            tracing::info!(
+                                n, rp, addr = format_args!("{addr:#x}"), ?words,
+                                "descriptor words published"
+                            );
+                        }
+                    }
                     let mut w = [0u32; 8];
                     let n_ = words.len().min(8);
                     w[..n_].copy_from_slice(&words[..n_]);
@@ -582,7 +601,15 @@ impl State {
                 for (n, &rp) in params.iter().enumerate() {
                     let lo = u64::from(self.user_value(compute, rp, RootType::Constants, 0));
                     let hi = u64::from(self.user_value(compute, rp, RootType::Constants, 1));
-                    let addr = lo | (hi << 32);
+                    let addr = if lo | (hi << 32) != 0 {
+                        lo | (hi << 32)
+                    } else {
+                        let index = self.user_value(compute, rp, RootType::Table, 0);
+                        match heap.slot_address(index) {
+                            Some(a) => a,
+                            None => continue,
+                        }
+                    };
                     let Some(words) = crate::shadow::peek(addr, 64) else { continue };
                     heap.set_scalar_words(n as u32, &words);
                 }
