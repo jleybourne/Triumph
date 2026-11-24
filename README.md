@@ -1,83 +1,126 @@
-# VIctory
+# Triumph
 
-Runs New Game 6 (Xbox Series X|S) natively on Windows, from files
-the user supplies.
+A compatibility layer that runs a Series-generation console title natively on
+Windows, from files you supply. The title's own x86-64 code runs unchanged
+inside our process; Triumph provides the platform underneath it and converts
+its data — ahead of time where it can, on first use where it must (shaders).
 
-The title's x86-64 code runs unchanged inside our process; VIctory supplies
-the platform underneath it and converts the title's data, ahead of time where
-it can and on first use where it must (shaders). See
-[docs/architecture.md](docs/architecture.md).
+Nothing here contains, decrypts or distributes game data.
 
-## Status (2026-11-23)
+> The binary and crates are still named `victory` (inherited from the upstream
+> project this was derived from). Only the repository is called Triumph.
 
-**Not playable yet.** The title boots, runs its menus at its own 30 fps and
-loads the world, where rendering fails.
+## Status
 
-| Stage | State |
-|-------|-------|
-| Boot, first-boot screens (accessibility, language, settings, legal) | works, 30 fps |
-| Intro video with sound | works |
-| Start screen, profile and saves | works |
-| Loading into the world (about 50 s) | works |
-| The world (first mission's intro) | reached and runs with indirect draws; its title card renders, the scene after it is still dark; 0.5-1.8 s per frame |
+**Playable: no. Loads into the world: yes. Renders the world: not yet.**
 
-Tested on one machine: Windows 11, AMD RX 6700 XT.
+The runtime boots the title, plays the intro, reaches the world and accepts
+input — the player moves, the camera turns, the pause menu opens. The screen
+stays black.
 
-> **Warning.** Entering the world on a real GPU can currently hang it, and
-> Windows then resets the display driver (every monitor goes black for a
-> moment). To look further, use a diagnostics build with
-> `VICTORY_D3D12_WARP=1`, which renders on the software adapter.
+That is not a renderer fault. The title is GPU-driven: its compute passes build
+the frame. A world frame reports:
 
-What each part does today and what it still needs:
-
-| Subsystem | Today | Needs |
-|-----------|-------|-------|
-| Loader | Runs the title's executable and its DLLs in our process; crash reports name the faulting code and are kept in `crashes.log` | – |
-| Runtime services | One signed-in offline user, licences, packages, saves that survive a kill at any step, text entry dialog | Speech is silent; the dialog and relaunch are untested live |
-| Network | Offline by design: the title cannot reach the network | – |
-| Files and streaming | Archives and streamed data read, zlib and BCPack decoded in parallel | Loading is limited by writes into title memory |
-| Input | XInput pads, keyboard, keyboard stand-in pad | Trigger rumble |
-| Audio | Menu, video and loading sound; XMA voices and Opus streams decode | Reverb is silent; Opus results unverified against the title |
-| GPU: menus | Draws, compute and presentation on host D3D12; only changed title memory is copied | Frame pacing drifts on one screen in release builds |
-| GPU: world | Mesh pipelines, shader-written buffers, descriptor lifetimes, indirect execution (arguments clamped), pipelines made by worker threads and kept on disk | Most of the scene is still missing (untranslated shaders drop draws); frames take seconds; real queries, depth bounds, HDR and scaling are missing |
-| Shaders | Console GPU code recompiled to DXIL at first use, cached on disk. Menus: all. World: mesh 8,191 of 8,506, vertex/pixel 10,617 of 12,346, compute 1,643 of 2,539 | 64-bit image atomics, merged geometry stages, the ray-tracing builder's shaders; some compute programs need a GPU with 64-lane waves |
-| Textures | Console tiled layouts and detiling for the modes the title uses | Render-target metadata planes |
-| Series S mode | Runs through the menus to the loading screen | The world, as above |
-
-## Getting started
-
-Requirements: Windows 10/11 x64, a CPU with AVX2, a Direct3D 12 GPU with
-shader model 6.6 (and mesh shaders for the world), Rust (pinned in
-`rust-toolchain.toml`).
-
-The title also needs several GiB of available Windows commit at startup.
-Check **Committed** under **Task Manager → Performance → Memory**. If
-`crashes.log` reports Windows error 1455, close other applications or increase
-the Windows paging file size, then retry.
-
-```powershell
-cargo xtask install-hooks                # asset-policy check on every commit
-copy victory.example.toml victory.toml   # then set your paths (outside the repo)
-cargo test --workspace                   # needs no game data
-cargo run -p victory -- config           # check your paths
+```
+draws=4218  drawn=4218        every draw executes
+dispatches=512 dispatched=0   no compute pass executes
 ```
 
-Run the title:
+All 512 dispatches are dropped because their shaders do not translate yet. With
+no culling, visibility or setup passes the draws have nothing to draw, the depth
+buffer stays flat, and the presented frame is black.
+
+## What works
+
+| Area | State |
+|---|---|
+| Boot, first-run screens (accessibility, language, settings, legal) | works, 30 fps |
+| Intro video and loading art | works, full colour |
+| Start screen, profile, saves | works |
+| Loading into the world (~50 s) | works |
+| Input: movement, camera, pause menu | works |
+| Renderer | a fully lit 3D image is produced for the cinematic stages — verified from captured render targets, so translation, presentation and texture handling work there |
+| Device removals | fixed: render-target views, pipeline states and clear values agree on one fully qualified format |
+| Console wave size | declared only to programs that read lanes, so 32-lane hardware can create those pipelines at all |
+| Deliberate aborts | the title's own crash-forcing write (`mov [0], tag`) and the `int3` after it are stepped over and logged instead of ending the process |
+| Framerate | 30 fps in menus, 1–3 fps in the world |
+
+## What does not work
+
+**1. The world is black.** 1,007 of the compute shaders the title uses fail to
+translate; with them go every compute pass. Failure classes in the compute set:
+
+| count | cause |
+|---|---|
+| 274 | lane mask read as data |
+| 115 | descriptor read only as data |
+| 87 | select on an untracked mask |
+| 85 | lane mask holding lanes elsewhere, read as data |
+| 34 | address in an SGPR that is no root parameter |
+| 24 | cross-lane operation outside the entry block |
+| 17 | address not from a root parameter |
+
+The mask family (446) and the address family (166) are the two clusters worth
+attacking; both are design changes in the translator, not missing opcodes.
+
+**2. Speed.** World frames take 600–900 ms against the title's own budget. The
+translated code costs roughly two orders of magnitude more per lane than the
+console's, so this is compiler efficiency (per-lane instruction count, 16-bit
+paths, wave64), not scheduling.
+
+**3. Smaller gaps.** Render-target metadata planes; reverb; HDR and dynamic
+resolution; the ray-tracing builder's shaders.
+
+## Translator census
+
+`victory translate` over the title's 26,084 programs:
+
+```
+vertex and pixel  12,766 of 14,027
+compute            1,464 of  2,582
+mesh               8,215 of  8,713
+```
+
+## Where it runs
+
+Development and testing are on one machine:
+
+| | |
+|---|---|
+| GPU | NVIDIA RTX 4070 Ti, 12 GB, driver 610.88 — 32-lane waves, no 64-lane support |
+| CPU | Intel i7-10700KF — no CLWB/CLZERO; the runtime emulates the console's AMD-only instructions |
+| Memory | 64 GB |
+| OS | Windows 11, build 26300 |
+| Display | 2560×1440 (the game window is placed 16:9 on the right) |
+| Toolchain | Rust 1.98.1, MSVC 14.51, DXC 10.0.26100, Windows SDK 10.0.26100 |
+
+Windows only. Linux and macOS are not targets.
+
+## Building and running
+
+Requirements: Windows 10/11 x64, AVX2, a Direct3D 12 GPU with shader model 6.6
+and mesh shaders, Rust (pinned in `rust-toolchain.toml`). The title needs several
+GiB of Windows commit at startup — check **Committed** in Task Manager if
+`crashes.log` reports error 1455.
 
 ```powershell
+copy victory.example.toml victory.toml     # then set your paths (outside the repo)
+cargo test --workspace                     # needs no game data
+cargo run -p victory -- config             # check your paths
+
 cargo build --release -p victory
 target\release\victory.exe run <game dir>\<the title's exe> --execute
 ```
 
-The window caption shows the framerate. Saves, settings and `crashes.log`
-are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
-data under the cache folder.
+The window caption shows the framerate. Saves, settings and `crashes.log` live
+under the data folder (default `%LOCALAPPDATA%\victory\data`); derived data
+under the cache folder.
 
-Input: XInput pads. With none connected the keyboard is a pad while the
+Input: XInput pads. With none connected the keyboard acts as a pad while the
 title's window has focus:
 
 | Keys | Pad |
-|------|-----|
+|---|---|
 | W A S D / I J K L | left / right stick |
 | arrows | D-pad |
 | Enter, Backspace, X, Y | A, B, X, Y |
@@ -98,39 +141,46 @@ victory run <exe> [--execute] [--unimplemented trap|zero] [--strict]
 victory config
 ```
 
-Logging: `VICTORY_LOG=victory_loader=trace,info` (a release build logs
-info and above).
+## Diagnostics
 
-## Debugging
-
-A release build has no debugging aids. Build them in with
+A release build carries none of these; build them in with
 
 ```powershell
 cargo build --profile diag -p victory --features diagnostics   # target\diag\victory.exe
 ```
 
 | Variable | Effect |
-|----------|--------|
+|---|---|
 | `VICTORY_LOG=<target>=debug,...` | debug and trace output |
 | `VICTORY_STACKS=20,60` | every thread's stack at those seconds |
-| `VICTORY_WATCH=<rva>,...` | logs a title u32 when it changes |
-| `VICTORY_KEYS=30:Enter,35:X` | presses keys at those seconds, focus or not |
-| `VICTORY_CRASH_SAVE=<rva>:<len>,...` | saves title memory to the cache folder on a crash |
-| `VICTORY_CAPTURE=<dir>` | saves presented frames (powers of two, or `VICTORY_CAPTURE_FRAMES=<list>`) |
-| `VICTORY_DUMP_TARGETS=1` | with the two above, saves every render target of those frames |
+| `VICTORY_KEYS=30:Enter,35:X` | press keys at those seconds, focus or not |
+| `VICTORY_CAPTURE=<dir>` | save presented frames (powers of two, or `VICTORY_CAPTURE_FRAMES=<list>`) |
+| `VICTORY_DUMP_TARGETS=1` | with the above, save every render target of those frames |
+| `VICTORY_DUMP_EVERY=1` | dump on a stride instead of at listed frames |
+| `VICTORY_DUMP_WORLD=1` | dump only frames that draw a world (>2,000 draws) |
+| `VICTORY_DUMP_CBV=1` | log the first words of vertex root constant buffers |
+| `VICTORY_GPU_TIMING=1` | time each list; log slow ones with their slowest commands |
+| `VICTORY_OPCODE_STATS=<hash>` | emitted instructions by name |
+| `VICTORY_SKIP_SLOW_PASSES=1` | bisection aid: drop compute passes on slow frames |
+| `VICTORY_LENIENT_MASKS=1` | take untracked lane masks as this wave's own bits |
+| `VICTORY_SKIP_PIPELINES=<hash>,...` | drop the draws and dispatches of named pipelines |
+| `VICTORY_TEXTURE_BUDGET_MIB=<n>` | cap host texture memory |
 | `VICTORY_D3D12_DEBUG=1` | host debug layer |
-| `VICTORY_D3D12_GBV=1` | with the above, GPU-based validation (bad descriptor use reported, not faulted; slow) |
-| `VICTORY_D3D12_DRED=1` | on a GPU failure, the allocation hit and the commands in flight |
-| `VICTORY_SKIP_PIPELINES=<hash>,...` | omit draws and dispatches, including indirect ones, whose pipeline contains a listed 16-digit shader hash |
-| `VICTORY_GPU_TIMING=1` | with the above, each list of a submission run and timed on its own; slow lists logged with their slowest commands |
-| `VICTORY_D3D12_WARP=1` | host device on the software adapter (slow; cannot reset the driver) |
-| `VICTORY_SHADER_LOOP_LIMIT=<n>` | translated shader loops stop after `n` iterations per lane instead of 2^20 (own shader cache entries); if a lower `n` makes world frames much faster, loops hitting the limit are what makes them slow |
-| `VICTORY_AUDIO_CAPTURE=<file.wav>` | records what the title plays (our process only) |
-| `VICTORY_XMA_DUMP=<dir>` | saves the first 32 XMA voices' context and input |
+| `VICTORY_D3D12_DRED=1` | on GPU failure, the allocation hit and commands in flight |
+| `VICTORY_D3D12_WARP=1` | software adapter (slow; cannot reset the display driver) |
+| `VICTORY_SHADER_LOOP_LIMIT=<n>` | stop translated loops after `n` iterations per lane |
 
 Every build appends crashes and host GPU failures to `crashes.log` in the
 title's data folder.
 
-## License
+## Upstream projects
+
+This work is derived from, and tracks, open-source console-compatibility
+projects: the runtime layer it started from, a sibling runtime with a mature
+RDNA2→SPIR-V translator, and the coordination hub for this title's shader census
+and shared blockers. Fixes found there are merged in; everything we write lands
+here.
+
+## Licence
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
