@@ -75,6 +75,15 @@ fn build() -> &'static [u8; 32] {
                 }
                 // And which clean-up passes ran over the translated code.
                 bytes.extend_from_slice(&victory_shader::emit::shader_opt().to_le_bytes());
+                // And the host's widest wave: a console wave64 program is
+                // translated in a 32-lane form only when the host is known to
+                // be 32 lanes wide. A program translated where no device was
+                // known (`host_max_wave` 0, e.g. a corpus `translate` run)
+                // keeps its `WaveSize(64)` declaration, and the device then
+                // refuses the pipeline with E_INVALIDARG and the pass is
+                // dropped. Keyed here, that translation cannot be served to a
+                // run that knows better.
+                bytes.extend_from_slice(&victory_shader::emit::host_max_wave().to_le_bytes());
                 *blake3::hash(&bytes).as_bytes()
             }
             Err(e) => {
