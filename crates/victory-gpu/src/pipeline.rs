@@ -304,9 +304,22 @@ pub(crate) fn builder_runs() -> bool {
     let missing = b.pipelines.iter().filter(|p| !make::now(p)).count();
     if missing > 0 {
         b.off = true;
+        // Name them: the builder is all-or-none, so these few programs are
+        // the whole of the missing light in shadow. A hash resolves to a
+        // source program with `shader-info --verbose`.
+        #[cfg(feature = "diagnostics")]
+        let names: Vec<String> = b
+            .pipelines
+            .iter()
+            .filter_map(|p| make::missing(p))
+            .take(8)
+            .collect();
+        #[cfg(not(feature = "diagnostics"))]
+        let names: Vec<String> = Vec::new();
         tracing::warn!(
             missing,
             of = b.pipelines.len(),
+            ?names,
             "the ray-tracing structure builder stays off: not all of its programs have a host pipeline, and its stages run all or none"
         );
         return false;

@@ -57,7 +57,7 @@ Americas | Victory  2 fps  478.6 ms/frame  5057 draws/frame   (default)
 | Loading into the world | ✅ Works |
 | **World renders** | ✅ **Yes** — geometry, characters, textures, sky, sun, HUD; verified from the presented frame |
 | Input: movement, camera, pause menu (pad and keyboard) | ✅ Works |
-| World draws submitted | ✅ 5,057 draws/frame |
+| World draws submitted | ✅ 5,057–6,890 draws/frame |
 | Frame time in the world | ❌ **252–272 ms/frame (4 fps)** with `VICTORY_RELAY=2`, 478 ms without — the budget is ~16 ms |
 | Light in shadow | ❌ Everything the sun does not hit directly is black: the title's ray-traced bounce light and ray-traced lamp/shadow passes do not run yet |
 | The first gameplay room after the cutscene hands over | ⚠️ Sometimes not drawn |
@@ -84,9 +84,17 @@ is 2,668 of 2,682.
    scheduling: instruction count per lane, 16-bit paths, and the wave64-on-wave32 exchange.
    The clean-up passes over finished modules already took about 43% off the host instruction
    count for ~20 ms; the rest is the same fight.
-2. **Light in shadow.** The ray-traced passes do not run, so anything out of direct sun is
-   black. The title's own structure-builder programs translate; the hardware ray/box and
-   ray/triangle test does not yet.
+2. **Indirect light.** Interiors are lit by direct and emissive light only (panels, sun through
+   a door, contact shadows) — the ray-traced bounce light and lamp/sun shadows are the missing
+   half. They live behind one all-or-none gate, and it is closed by a small, enumerated list:
+   - **3 of 53** ray-tracing structure-builder compute programs do not translate
+     (`39321a95223001ed`, `77360df21e12ea43`, `9fc111d3be79364f`), and the builder runs all
+     stages or none.
+   - **4 compute programs** are rejected by `CreateComputePipelineState` with
+     `E_INVALIDARG` (`2da4beb386509b77`, `369cbe906ea72764`, `02384a60fda6f2d0`,
+     `2cc4c197ee29e291`) — a root-signature/shader disagreement, the same class as the
+     declared-wave-size bug. They are retried eight times and then dropped, and several
+     material passes are among the ones dropped.
 3. **The first gameplay room** is sometimes not drawn after the cutscene hands over.
 
 ## Milestones
@@ -95,6 +103,8 @@ Every change that moves the end result is committed here with its measurement.
 
 | Date | Milestone | Evidence |
 |---|---|---|
+| 2026-11-25 | **Interiors light up.** Direct and emissive light, contact shadows and the HUD in the first gameplay room; the missing half is the ray-traced indirect pass | 6,890 draws/frame, 4 fps, 280.9 ms, `removed=0` |
+| 2026-11-25 | **The lighting blockers are named, not guessed.** The all-or-none ray-tracing builder gate was made to print what it is missing | 3 of 53 builder programs untranslated; 4 compute pipelines refused `E_INVALIDARG` |
 | 2026-11-25 | **Frame time nearly halved.** `VICTORY_RELAY=2` sends submissions ahead of the wait for the card and lands their results as it finishes | 478.6 → 252.9 ms/frame at 4,931 draws/frame; `removed=0` |
 | 2026-11-25 | **The world renders.** Base moved to the fxceless fork's tree, whose meshlet-culling, view-kind, mip-level and implicit-sample fixes are what make the world draw at all | 5,057 draws/frame, 2 fps, `removed=0` |
 | 2026-11-25 | **A refused pipeline is retried, not abandoned.** `CreatePipelineState` returning `E_OUTOFMEMORY` used to be cached as "cannot be made" for the whole run | draws/frame 3,972 → 5,060; frame time 749.7 → 478.6 ms |
