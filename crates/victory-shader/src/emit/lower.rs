@@ -3338,6 +3338,15 @@ impl<'a> Lower<'a> {
             }
             None => vec![(2, field(self, 0))],
         };
+        // A word we cannot synthesise from the view (an address, a format, a
+        // tiling mode): the host's table has the title's own dwords, so read
+        // the whole load from there rather than stopping the program.
+        if (0..count).any(|k| {
+            let rel = k.wrapping_sub(u32::from(first));
+            !words.iter().any(|w| w.0 == rel)
+        }) {
+            return self.descriptor_words(inst, site);
+        }
         for k in 0..count {
             let rel = k.wrapping_sub(u32::from(first));
             match words.iter().find(|w| w.0 == rel) {
