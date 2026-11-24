@@ -260,6 +260,22 @@ pub(crate) fn is_skipped(this: This) -> bool {
 /// Counts a draw or dispatch of `this` intentionally skipped or dropped
 /// for want of a host pipeline (diagnostics).
 #[cfg(all(windows, feature = "diagnostics"))]
+/// A pipeline's stages and shader hashes, for reports.
+pub(crate) fn describe(this: This) -> String {
+    if this.is_null() {
+        return "no pipeline".to_owned();
+    }
+    let p = pipeline(this);
+    if p.shaders.is_empty() {
+        return "no pipeline".to_owned();
+    }
+    p.shaders
+        .iter()
+        .map(|s| format!("{} {}", s.stage, s.hash))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub(crate) fn note_drop(this: This) {
     let why = if this.is_null() {
         Some("no pipeline set".to_owned())

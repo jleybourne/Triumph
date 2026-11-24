@@ -530,7 +530,9 @@ impl<'a> Lower<'a> {
             mask_data: match x.native.stage {
                 HwStage::Cs => MaskData::Console,
                 HwStage::Ps | HwStage::Vs => MaskData::Host,
-                _ => MaskData::None,
+                // A mesh program's masks are the console's own: the host has no
+                // wave64 to hold them, so their bits are carried as numbers.
+                _ => MaskData::Console,
             },
             mask_ok: false,
             ballots: HashMap::new(),
@@ -924,6 +926,44 @@ impl<'a> Lower<'a> {
                 // not say which opcode the translator could not handle.
                 if let Err(e) = self.inst(b, i) {
                     let inst = &self.x.p.blocks[b].insts[i];
+                    // `VICTORY_LENIENT_MASKS`: an instruction that reads a mask
+                    // the structure pass could not follow writes zeros and the
+                    // program goes on -- the alternative is losing every draw of
+                    // a mesh pipeline over one value.
+                    let lenient = std::env::var_os("VICTORY_LENIENT_MASKS").is_some();
+                    let masked = matches!(
+                        &e,
+                        Stop::Fail(ShaderError::Unsupported { what, .. })
+                            if what.contains("lane mask read as data")
+                    );
+                    if lenient && masked {
+                        let zero = self.s.m.i32(0);
+                        for k in 0..inst.writes.len() {
+                            let reg = inst.writes[k].0;
+                            self.write(inst, reg, zero, None);
+                        }
+                        i += 1;
+                        continue;
+                    }
+                    // `VICTORY_LENIENT_MASKS`: a mask the structure pass could
+                    // not follow is read as data by this instruction. Its
+                    // results are written as zero and the program goes on --
+                    // the alternative is losing every draw of a mesh pipeline.
+                    let lenient = std::env::var_os("VICTORY_LENIENT_MASKS").is_some();
+                    let masked = matches!(
+                        &e,
+                        Stop::Fail(ShaderError::Unsupported { what, .. })
+                            if what.contains("lane mask read as data")
+                    );
+                    if lenient && masked {
+                        let zero = self.s.m.i32(0);
+                        for k in 0..inst.writes.len() {
+                            let reg = inst.writes[k].0;
+                            self.write(inst, reg, zero, None);
+                        }
+                        i += 1;
+                        continue;
+                    }
                     eprintln!(
                         "stopped at offset {:#x} on {}",
                         inst.machine.offset,
@@ -1698,7 +1738,12 @@ impl<'a> Lower<'a> {
                     let z = self.s.m.i32(0);
                     Ok(self.s.m.cmp(at, pred::NE, x, z))
                 }
-                Val::Missing(w) => Err(w),
+                // `VICTORY_LENIENT_MASKS`: a mask the structure pass dropped is
+                // false for this lane rather than the whole program's loss.
+                Val::Missing(w) => match std::env::var_os("VICTORY_LENIENT_MASKS") {
+                    Some(_) => Ok(self.s.m.bool(false)),
+                    None => Err(w),
+                },
             },
             Atom::Phi(id) => {
                 if let Some(&v) = self.mask_phis.get(&id) {
@@ -2497,6 +2542,13 @@ impl<'a> Lower<'a> {
         };
         let lo = dst_code.and_then(|c| inst.write(Reg::S(c)));
         if inst.write(Reg::S(EXEC)).is_some() || self.is_mask(lo) {
+            // `VICTORY_LENIENT_MASKS`: a program that writes a mask register
+            // with an ordinary scalar instruction keeps its other effects, and
+            // the mask itself is not modelled -- the alternative is losing
+            // every draw of the pipeline that reads it.
+            if std::env::var_os("VICTORY_LENIENT_MASKS").is_some() {
+                return Ok(());
+            }
             return Err(LANE_MASK);
         }
         if matches!(

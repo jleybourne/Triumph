@@ -26,6 +26,31 @@ use crate::host::HostList;
 use crate::object::This;
 use crate::pipeline::host::HostPipeline;
 
+
+/// Counts a draw or dispatch dropped for want of a host pipeline, and reports
+/// the worst offenders periodically: the world's work is mostly dropped, and
+/// naming them says which programs to fix.
+fn note_pipeline_drop(this: This) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static COUNTS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+    let mut guard = COUNTS.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    let key = crate::pipeline::describe(this);
+    let n = map.entry(key).or_insert(0);
+    *n += 1;
+    static TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let total = TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if total % 20000 == 0 {
+        let mut top: Vec<(u64, &String)> = map.iter().map(|(k, v)| (*v, k)).collect();
+        top.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        tracing::warn!(
+            worst = ?top.iter().take(6).map(|(c, k)| format!("{c} x {k}")).collect::<Vec<_>>(),
+            "draws dropped without a host pipeline"
+        );
+    }
+}
+
 /// A root argument as the title set it.
 #[derive(Debug, Clone, Default)]
 enum Root {
@@ -750,6 +775,9 @@ impl State {
         crate::capture::count_draw();
         if crate::host::cut() {
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            if crate::pipeline::host_pipeline(self.pipeline as This).is_none() {
+                note_pipeline_drop(self.pipeline as This);
+            }
             return;
         }
         // A frame that already ran too long: drop the compute passes (they feed
@@ -1142,6 +1170,25 @@ impl State {
     ) {
         #[cfg(feature = "diagnostics")]
         self.trace("draw", vertices, first);
+        // A fullscreen/quad draw (a composite or a blit): the passes that put the
+        // world on screen are these, so name them.
+        if std::env::var_os("VICTORY_DUMP_DRAWS").is_some() && vertices <= 6 {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n < 40 {
+                let hash = crate::pipeline::host_pipeline(self.pipeline as This)
+                    .and_then(|p| p.stages.iter().map(|s| s.shader.hash.clone()).last());
+                tracing::warn!(
+                    n,
+                    pipeline = self.pipeline,
+                    hash = ?hash,
+                    vertices,
+                    targets = ?self.targets,
+                    depth = self.depth,
+                    "fullscreen draw"
+                );
+            }
+        }
         if std::env::var_os("VICTORY_DUMP_DRAWS").is_some() && vertices >= 32 {
             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1406,17 +1453,19 @@ impl State {
             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if n < 30 {
-                tracing::warn!(
-                    n,
-                    kind,
-                    max,
-                    pipeline = self.pipeline,
-                    ran,
-                    "indirect draw"
-                );
+                let hashes = crate::pipeline::host_pipeline(self.pipeline as This)
+                    .map(|p| {
+                        p.stages
+                            .iter()
+                            .map(|s| s.shader.hash.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                tracing::warn!(n, kind, max, ?hashes, ran, "indirect draw");
             }
         }
         if !ran {
+            note_pipeline_drop(self.pipeline as This);
             crate::indirect::done(list, &args.buffer);
             #[cfg(feature = "diagnostics")]
             match crate::pipeline::host_pipeline(self.pipeline as This) {
