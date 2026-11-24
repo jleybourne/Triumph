@@ -240,6 +240,27 @@ impl State {
     }
 
     pub(crate) fn set_vertex_buffers(&mut self, start: u32, views: &[VertexView]) {
+        if std::env::var_os("VICTORY_DUMP_VB").is_some() && crate::queue::presented() > 200 {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            for (i, v) in views.iter().enumerate() {
+                if v.address == 0 || v.size < 4096 {
+                    continue;
+                }
+                let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if n >= 24 {
+                    break;
+                }
+                let words = crate::shadow::peek(v.address, 8).unwrap_or_default();
+                tracing::warn!(
+                    slot = start as usize + i,
+                    address = format!("{:#x}", v.address),
+                    size = v.size,
+                    stride = v.stride,
+                    ?words,
+                    "vertex buffer"
+                );
+            }
+        }
         for (i, v) in views.iter().enumerate() {
             if let Some(slot) = self.vertex.get_mut(start as usize + i) {
                 *slot = *v;
@@ -487,6 +508,16 @@ impl State {
                         Some(&(_, offset)) => offset,
                         None => self.user_value(compute, u.slot, u.root, u.dword),
                     };
+                }
+                if std::env::var_os("VICTORY_DUMP_CBV").is_some() && values.len() >= 16 {
+                    static N: std::sync::atomic::AtomicU32 =
+                        std::sync::atomic::AtomicU32::new(0);
+                    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if n < 12 {
+                        let floats: Vec<f32> =
+                            values[..16].iter().map(|w| f32::from_bits(*w)).collect();
+                        tracing::warn!(n, dwords = dwords, ?floats, "root constants");
+                    }
                 }
                 // SAFETY: an open list; `values` covers the parameter.
                 unsafe {
@@ -1111,6 +1142,36 @@ impl State {
     ) {
         #[cfg(feature = "diagnostics")]
         self.trace("draw", vertices, first);
+        if std::env::var_os("VICTORY_DUMP_DRAWS").is_some() && vertices >= 32 {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n < 30 {
+                tracing::warn!(
+                    n,
+                    pipeline = self.pipeline,
+                    vertices,
+                    instances,
+                    targets = ?self.targets,
+                    depth = self.depth,
+                    "draw state"
+                );
+            }
+        }
+        if std::env::var_os("VICTORY_DUMP_VB").is_some() && crate::queue::presented() > 1200 {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n < 24 {
+                tracing::warn!(
+                    n,
+                    vertices,
+                    instances,
+                    first,
+                    first_instance,
+                    indices = 0u32,
+                    "draw counts"
+                );
+            }
+        }
         if crate::host::cut() {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             return;
@@ -1341,6 +1402,20 @@ impl State {
             },
             _ => false,
         };
+        if std::env::var_os("VICTORY_DUMP_DRAWS").is_some() {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n < 30 {
+                tracing::warn!(
+                    n,
+                    kind,
+                    max,
+                    pipeline = self.pipeline,
+                    ran,
+                    "indirect draw"
+                );
+            }
+        }
         if !ran {
             crate::indirect::done(list, &args.buffer);
             #[cfg(feature = "diagnostics")]

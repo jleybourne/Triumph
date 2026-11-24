@@ -31,7 +31,7 @@ pub(crate) fn listed(n: u64) -> bool {
 
 /// Whether frame `n` is saved.
 pub(crate) fn wanted(n: u64) -> bool {
-    folder().is_some() && (n.is_power_of_two() || listed(n))
+    folder().is_some() && (n.is_power_of_two() || listed(n) || requested())
 }
 
 /// Saves 8-bit RGBA or BGRA rows (`pitch` bytes apart) as frame `n`.
@@ -248,6 +248,31 @@ fn dump_on() -> bool {
 /// With `VICTORY_DUMP_EVERY` set: targets are noted every frame, so a dump can
 /// be had wherever the run happens to be (the listing gates by frame number
 /// otherwise, and frames this slow make a chosen number hard to reach).
+/// A capture asked for by creating `capture-now` in the data folder: the file
+/// is removed and the next frame dumped, so a running title can be photographed
+/// without a relaunch.
+/// An asked-for capture waiting to be written.
+static PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn requested() -> bool {
+    if PENDING.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    for path in ["D:/victory-data/capture-now", "victory-data/capture-now"] {
+        if std::path::Path::new(path).exists() {
+            let _ = std::fs::remove_file(path);
+            PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+            return true;
+        }
+    }
+    false
+}
+
+/// Ends an asked-for capture, once the frame and its targets are written.
+pub(crate) fn clear_request() {
+    PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub(crate) fn dump_every() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_DUMP_EVERY").is_some())
@@ -259,7 +284,7 @@ pub(crate) fn note_target(resource: crate::object::This) {
         return;
     }
     let world = dump_world() && FRAME_DRAWS.load(std::sync::atomic::Ordering::Relaxed) > 2000;
-    if !(listed(crate::queue::presented() + 1) || dump_every() || world) {
+    if !(listed(crate::queue::presented() + 1) || dump_every() || world || requested()) {
         return;
     }
     let mut targets = TARGETS.lock().unwrap_or_else(|e| e.into_inner());

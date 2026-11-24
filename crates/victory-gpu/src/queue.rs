@@ -292,6 +292,7 @@ extern "system" fn present(
         // images); `VICTORY_DUMP_WORLD` dumps only frames that draw a world.
         let world = crate::capture::dump_world() && crate::capture::frame_draws() > 2000;
         if crate::capture::listed(frame)
+            || crate::capture::requested()
             || (crate::capture::dump_every() && frame % 30 == 0)
             || (world && frame % 10 == 0)
         {

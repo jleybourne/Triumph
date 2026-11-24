@@ -270,6 +270,23 @@ pub(crate) fn note_drop(this: This) {
             .or_else(|| make::missing(&p.host))
     };
     if let Some(why) = why {
+        // Name the pipeline's shaders once, so a dropped world pass can be
+        // traced back to a program that would not translate.
+        if !this.is_null() {
+            let p = pipeline(this);
+            let name = p
+                .shaders
+                .iter()
+                .map(|s| format!("{} {}", s.stage, s.hash))
+                .collect::<Vec<_>>()
+                .join(", ");
+            static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+            let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+            if !seen.iter().any(|n| *n == name) && seen.len() < 40 {
+                tracing::warn!(name = %name, why = %why, "pipeline dropped");
+                seen.push(name);
+            }
+        }
         note_why(why);
     }
 }
