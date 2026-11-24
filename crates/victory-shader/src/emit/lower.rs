@@ -1182,7 +1182,13 @@ impl<'a> Lower<'a> {
         match self.get(v)? {
             Val::I32(x) => Ok(x),
             Val::Bit(x) => Ok(self.s.m.cast(self.cur, Cast::ZExt, x, self.s.t.i32)),
-            Val::Missing(w) => Err(w),
+            // `VICTORY_LENIENT_MASKS`: a value the structure pass dropped is
+            // still written by the shader; zero is what a lane outside the mask
+            // holds, and refusing costs the whole program.
+            Val::Missing(w) => match std::env::var_os("VICTORY_LENIENT_MASKS") {
+                Some(_) => Ok(self.s.m.i32(0)),
+                None => Err(w),
+            },
         }
     }
 
