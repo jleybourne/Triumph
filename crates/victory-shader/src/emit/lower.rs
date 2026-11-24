@@ -4463,10 +4463,20 @@ impl<'a> Lower<'a> {
                 {
                     self.lane_bits.insert(w, carry);
                 }
+                let lenient = std::env::var_os("VICTORY_LENIENT_MASKS").is_some();
                 for &(_, w) in &inst.writes {
-                    self.vals
-                        .entry(w)
-                        .or_insert(Val::Missing("a lane mask read as data"));
+                    if lenient {
+                        // The console's register holds this lane's bit; the
+                        // structure pass kept only the boolean, so the bit is
+                        // what a later read of the word should see.
+                        let (one, zero) = (self.s.m.i32(1), self.s.m.i32(0));
+                        let bit = self.s.m.select(c, carry, one, zero);
+                        self.vals.entry(w).or_insert(Val::I32(bit));
+                    } else {
+                        self.vals
+                            .entry(w)
+                            .or_insert(Val::Missing("a lane mask read as data"));
+                    }
                 }
                 Ok(())
             }
