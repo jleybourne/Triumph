@@ -978,6 +978,18 @@ pub(crate) fn texture_memory(this: This) -> Option<(*const u8, ResourceDesc)> {
 }
 
 /// A buffer's host memory and size; `None` for textures.
+/// A texture's width, height, depth or array size, levels and dimension.
+pub(crate) fn texture_dims(this: This) -> Option<(u32, u32, u32, u32, u32)> {
+    let (_, d) = texture_memory(this)?;
+    Some((
+        d.width.min(u64::from(u32::MAX)) as u32,
+        d.height,
+        u32::from(d.depth_or_array_size),
+        u32::from(d.mip_levels),
+        d.dimension,
+    ))
+}
+
 pub(crate) fn buffer_bytes(this: This) -> Option<(*mut u8, u64)> {
     if this.is_null() {
         return None;

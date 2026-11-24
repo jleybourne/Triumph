@@ -558,22 +558,20 @@ impl State {
                         let a = lo | (hi << 32);
                         (a != 0).then_some(a)
                     });
-                    let Some(addr) = addr else { continue };
-                    let Some(words) = crate::shadow::peek(addr, 8) else { continue };
+                    let _ = addr;
+                    // The fields come from the host view: the title's descriptor
+                    // is a handle onto it, so its memory has no such words.
+                    let Some(w) = heap.slot_words(index) else { continue };
                     {
                         static N: std::sync::atomic::AtomicU32 =
                             std::sync::atomic::AtomicU32::new(0);
                         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         if n < 24 {
                             tracing::info!(
-                                n, rp, addr = format_args!("{addr:#x}"), ?words,
-                                "descriptor words published"
+                                n, rp, index, words = ?w, "descriptor words published"
                             );
                         }
                     }
-                    let mut w = [0u32; 8];
-                    let n_ = words.len().min(8);
-                    w[..n_].copy_from_slice(&words[..n_]);
                     heap.set_descriptor_words(n as u32, &w);
                 }
                 let Some(gpu) = heap.descriptor_data_gpu() else {

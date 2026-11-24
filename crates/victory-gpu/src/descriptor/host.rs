@@ -44,6 +44,8 @@ pub(crate) struct HostHeap {
     scalar_data: Option<DescTable>,
     /// The title address each slot was last mirrored from.
     addresses: Mutex<Vec<u64>>,
+    /// Each slot's descriptor fields, rebuilt from the host view.
+    slot_words: Mutex<Vec<[u32; 8]>>,
     /// The first of the [`ALIASES`] slots after the dynamic ones (view
     /// heaps), and which slots have a raw view there.
     alias_base: u32,
@@ -127,6 +129,48 @@ impl StrideTable {
             len,
         })
     }
+}
+
+
+/// The descriptor's fields as the console compiler reads them (GFX10 layout),
+/// rebuilt from the host view: an image's width, height, levels, depth and
+/// type, or a buffer's size. The console's base address is not among them --
+/// a title "descriptor" here is a handle onto a host view, not GPU memory.
+fn words_of(view: &crate::descriptor::View) -> [u32; 8] {
+    use crate::descriptor::View;
+    let mut w = [0u32; 8];
+    match view {
+        View::Constant(addr, size) => {
+            w[0] = *addr as u32;
+            w[1] = (addr >> 32) as u32;
+            w[2] = size.saturating_sub(1);
+        }
+        View::Shader(r, _) | View::Unordered(r, _, _) => {
+            let id = *r as crate::object::This;
+            if let Some((_, bytes)) = crate::resource::buffer_bytes(id) {
+                w[1] = 0x8000;
+                w[2] = bytes.saturating_sub(1).min(u64::from(u32::MAX)) as u32;
+            } else if let Some((tw, th, tp, tl, td)) = crate::resource::texture_dims(id) {
+                let width = tw.max(1);
+                let height = th.max(1);
+                let depth = tp.max(1);
+                let levels = tl.max(1);
+                let ty = match td {
+                    2 => 9u32,
+                    3 => 10,
+                    4 => 12,
+                    _ => 8,
+                };
+                let (wi, hi) = (width - 1, height - 1);
+                w[1] = (wi >> 14) << 30;
+                w[2] = (wi & 0x3FFF) | (hi << 14);
+                w[3] = 0xFAC | (ty << 28) | ((levels - 1) << 16);
+                w[4] = depth - 1;
+            }
+        }
+        _ => {}
+    }
+    w
 }
 
 fn write_words(table: Option<&DescTable>, entry: u32, words: &[u32]) {
@@ -345,6 +389,7 @@ impl HostHeap {
         let desc_data = if sampler { None } else { DescTable::new(&host.device, 64, 8) };
         let scalar_data = if sampler { None } else { DescTable::new(&host.device, 32, 64) };
         let addresses = Mutex::new(vec![0u64; count as usize]);
+        let slot_words = Mutex::new(vec![[0u32; 8]; count as usize]);
         let strides = if sampler {
             None
         } else {
@@ -364,6 +409,7 @@ impl HostHeap {
             desc_data,
             scalar_data,
             addresses,
+            slot_words,
             alias_base: count + extra,
             aliases: Mutex::new(Aliases {
                 of: HashMap::new(),
@@ -611,6 +657,14 @@ impl HostHeap {
         a.get(index as usize).copied().filter(|&x| x != 0)
     }
 
+    /// The descriptor fields of slot `index`, rebuilt from its host view.
+    pub(crate) fn slot_words(&self, index: u32) -> Option<[u32; 8]> {
+        let w = self.slot_words.lock().unwrap_or_else(|e| e.into_inner());
+        w.get(index as usize)
+            .copied()
+            .filter(|x| x[2] != 0 || x[3] != 0 || x[1] != 0)
+    }
+
     /// Where the host publishes descriptor dwords for shaders that read them
     /// as numbers, and a writer for one entry.
     pub(crate) fn descriptor_data_gpu(&self) -> Option<u64> {
@@ -663,6 +717,14 @@ impl HostHeap {
             }
             return None;
         };
+        if let Some(slot) = self
+            .slot_words
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(index as usize)
+        {
+            *slot = words_of(&view);
+        }
         if made[index as usize] != key {
             let later = !for_draw && view.is_buffer();
             made[index as usize] = if later { 0 } else { key };
