@@ -39,12 +39,13 @@ This project refers to the game it runs as **New Game 6**.
 
 ## Project status
 
-**The world renders. It is not playable yet: 2 fps, 478 ms per frame.**
+**The world renders. It is not playable yet: 4 fps, about 260 ms per frame.**
 
 Measured on the machine below, 2026-11-25, with the world reached and running:
 
 ```
-Americas | Victory  2 fps  478.6 ms/frame  5057 draws/frame
+Americas | Victory  4 fps  272.2 ms/frame  4926 draws/frame   (VICTORY_RELAY=2)
+Americas | Victory  2 fps  478.6 ms/frame  5057 draws/frame   (default)
                                                     device removals: 0
 ```
 
@@ -57,7 +58,7 @@ Americas | Victory  2 fps  478.6 ms/frame  5057 draws/frame
 | **World renders** | ✅ **Yes** — geometry, characters, textures, sky, sun, HUD; verified from the presented frame |
 | Input: movement, camera, pause menu (pad and keyboard) | ✅ Works |
 | World draws submitted | ✅ 5,057 draws/frame |
-| Frame time in the world | ❌ **478.6 ms/frame (2 fps)** — needs to be under ~16 ms |
+| Frame time in the world | ❌ **252–272 ms/frame (4 fps)** with `VICTORY_RELAY=2`, 478 ms without — the budget is ~16 ms |
 | Light in shadow | ❌ Everything the sun does not hit directly is black: the title's ray-traced bounce light and ray-traced lamp/shadow passes do not run yet |
 | The first gameplay room after the cutscene hands over | ⚠️ Sometimes not drawn |
 | Memory in play | ⚠️ About 24 GB in use |
@@ -79,7 +80,7 @@ is 2,668 of 2,682.
 
 ### What is left, in order
 
-1. **Frame time.** 478 ms is 30× the budget. The cost is per-workgroup translated code, not
+1. **Frame time.** About 260 ms is 16× the budget. The cost is per-workgroup translated code, not
    scheduling: instruction count per lane, 16-bit paths, and the wave64-on-wave32 exchange.
    The clean-up passes over finished modules already took about 43% off the host instruction
    count for ~20 ms; the rest is the same fight.
@@ -94,6 +95,7 @@ Every change that moves the end result is committed here with its measurement.
 
 | Date | Milestone | Evidence |
 |---|---|---|
+| 2026-11-25 | **Frame time nearly halved.** `VICTORY_RELAY=2` sends submissions ahead of the wait for the card and lands their results as it finishes | 478.6 → 252.9 ms/frame at 4,931 draws/frame; `removed=0` |
 | 2026-11-25 | **The world renders.** Base moved to the fxceless fork's tree, whose meshlet-culling, view-kind, mip-level and implicit-sample fixes are what make the world draw at all | 5,057 draws/frame, 2 fps, `removed=0` |
 | 2026-11-25 | **A refused pipeline is retried, not abandoned.** `CreatePipelineState` returning `E_OUTOFMEMORY` used to be cached as "cannot be made" for the whole run | draws/frame 3,972 → 5,060; frame time 749.7 → 478.6 ms |
 | 2026-11-25 | **The 63 s watchdog kill is gone.** A group barrier in a block only some lanes reach hangs the device; it is left out of those blocks | `removed=0` on runs that previously lost the device every time |
@@ -174,8 +176,16 @@ cargo build --profile diag -p victory --features diagnostics   # target\diag\vic
 | `VICTORY_D3D12_WARP=1` | software adapter (slow; cannot reset the display driver) |
 | `VICTORY_SHADER_LOOP_LIMIT=<n>` | stop translated loops after `n` iterations per lane |
 | `VICTORY_WAVE_WIDE=1` | the two-device-wave form for 64-lane programs (off by default: its barriers sit in branches) |
+| `VICTORY_RELAY=2` | send submissions ahead of the wait and land results as the card finishes: **the frame-time win, 478 → 253 ms** |
+| `VICTORY_LATE_WAIT=<n>` | send up to `n` submissions ahead of the wait |
+| `VICTORY_WIDE_BACK=1`, `VICTORY_CARD_BUFFERS_MIN_MB=<n>`, `VICTORY_CARD_BUFFERS_MB=<n>` | larger in-card buffers, back-ended |
 
 Every build appends crashes and host GPU failures to `crashes.log` in the title's data folder.
+
+Measured caution: `VICTORY_RELAY=2` on its own is stable here, but the combination
+`VICTORY_LATE_WAIT=3 VICTORY_WIDE_BACK=1 VICTORY_CARD_BUFFERS_MIN_MB=1 VICTORY_CARD_BUFFERS_MB=1024`
+lost the device to a reset (`0x887A0007`) while still in the menus on this machine. Change one at a
+time and keep the run that survives.
 
 ## How it works
 
