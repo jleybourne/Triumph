@@ -600,6 +600,11 @@ impl HostHeap {
     /// if it changed since, and returns the view recorded there. Buffer
     /// views are made only for draws (`for_draw`), which also copy their
     /// data: a host copy of a buffer is made on first use.
+    /// Bytes per slot in this heap.
+    pub(crate) fn step(&self) -> u32 {
+        self.step
+    }
+
     /// The title address slot `index` was last mirrored from.
     pub(crate) fn slot_address(&self, index: u32) -> Option<u64> {
         let a = self.addresses.lock().unwrap_or_else(|e| e.into_inner());

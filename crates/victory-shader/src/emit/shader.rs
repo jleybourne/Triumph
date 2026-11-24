@@ -604,7 +604,11 @@ impl Shader {
                 cbvs = Some(self.m.md_node(cbv_list));
             }
             let mut srvs = None;
-            if !self.root_srvs.is_empty() || self.stride_table.is_some() {
+            if !self.root_srvs.is_empty()
+                || self.stride_table.is_some()
+                || !self.descriptor_data.is_empty()
+                || !self.scalar_data.is_empty()
+            {
                 let mut specs: Vec<(u32, u32)> = self
                     .root_srvs
                     .iter()
@@ -612,6 +616,12 @@ impl Shader {
                     .collect();
                 if self.stride_table.is_some() {
                     specs.push((STRIDE_SPACE, 0));
+                }
+                if !self.descriptor_data.is_empty() {
+                    specs.push((DESC_DATA_SPACE, 0));
+                }
+                if !self.scalar_data.is_empty() {
+                    specs.push((SCALAR_DATA_SPACE, 0));
                 }
                 let ty = self
                     .m

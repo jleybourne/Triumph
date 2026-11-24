@@ -549,7 +549,9 @@ impl State {
                 for (n, &rp) in params.iter().enumerate() {
                     // Either a heap index (a table root) or a 64-bit address
                     // passed in root constants: take whichever the title set.
-                    let index = self.user_value(compute, rp, RootType::Table, 0);
+                    // A table root's user value is a byte offset into its heap.
+                    let offset = self.user_value(compute, rp, RootType::Table, 0);
+                    let index = offset / heap.step().max(1);
                     let addr = heap.slot_address(index).or_else(|| {
                         let lo = u64::from(self.user_value(compute, rp, RootType::Constants, 0));
                         let hi = u64::from(self.user_value(compute, rp, RootType::Constants, 1));
@@ -604,8 +606,8 @@ impl State {
                     let addr = if lo | (hi << 32) != 0 {
                         lo | (hi << 32)
                     } else {
-                        let index = self.user_value(compute, rp, RootType::Table, 0);
-                        match heap.slot_address(index) {
+                        let offset = self.user_value(compute, rp, RootType::Table, 0);
+                        match heap.slot_address(offset / heap.step().max(1)) {
                             Some(a) => a,
                             None => continue,
                         }
