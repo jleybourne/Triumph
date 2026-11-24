@@ -1223,8 +1223,19 @@ impl<'a> Lower<'a> {
             Some(&lo) => (lo, true),
             None => (v, false),
         };
-        let &m = self.x.st.masks.get(&lo).ok_or(LANE_MASK)?;
-        if !self.x.st.active.contains(&lo) {
+        let lenient = std::env::var_os("VICTORY_LENIENT_MASKS").is_some();
+        let &m = match self.x.st.masks.get(&lo) {
+            Some(m) => m,
+            None => {
+                // `VICTORY_LENIENT_MASKS`: the register already holds the mask
+                // bits, which is what the console reads here.
+                if lenient {
+                    return self.i32_of(v);
+                }
+                return Err(LANE_MASK);
+            }
+        };
+        if !self.x.st.active.contains(&lo) && !lenient {
             return Err("a lane mask holding lanes elsewhere read as data");
         }
         let (x, y) = match self.ballots.get(&lo) {
@@ -7288,11 +7299,14 @@ impl<'a> Lower<'a> {
             for (n, &q) in p.blocks[b].preds.iter().enumerate() {
                 let Some(qb) = self.tail[q] else { continue };
                 let qb = self.edges.get(&(q, b)).copied().unwrap_or(qb);
-                let m =
-                    *self.x.st.masks.get(&phi.args[n]).ok_or_else(|| {
-                        unsupported(offset, "a lane-mask join of an untracked mask")
-                    })?;
-                let x = self.boolean(m, qb).map_err(|w| unsupported(offset, w))?;
+                let lenient = std::env::var_os("VICTORY_LENIENT_MASKS").is_some();
+                let x = match self.x.st.masks.get(&phi.args[n]).copied() {
+                    Some(m) => self.boolean(m, qb).map_err(|w| unsupported(offset, w))?,
+                    None if lenient => self.s.m.bool(false),
+                    None => {
+                        return Err(unsupported(offset, "a lane-mask join of an untracked mask"))
+                    }
+                };
                 incoming.push((x, qb));
             }
             self.s.m.set_phi(v, incoming);
