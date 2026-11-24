@@ -130,6 +130,13 @@ pub(crate) struct Translated {
 
 #[cfg(windows)]
 impl Shader {
+    /// Whether the shader translated (so a host pipeline can be made from
+    /// it). Retrying a host pipeline whose shader does not translate cannot
+    /// change the answer, so it is not retried.
+    pub(crate) fn translates(&self) -> bool {
+        matches!(self.translated.get(), Some(Some(_)))
+    }
+
     /// The translation, made on first use; a shader that does not
     /// translate is logged once.
     pub(crate) fn translated(&self) -> Option<&Translated> {

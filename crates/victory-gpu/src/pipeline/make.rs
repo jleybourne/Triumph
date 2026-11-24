@@ -16,7 +16,7 @@
 //! runs only once and whose pipeline takes longer is lost.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -28,7 +28,12 @@ pub(crate) struct Pending {
     shaders: Vec<Arc<Shader>>,
     pub(crate) graphics: Option<Box<GraphicsState>>,
     queue_state: AtomicU8,
+    /// Set only when a host pipeline was made: a creation the device refused
+    /// leaves it empty so a later frame can try again (see [`Pending::make`]).
     made: OnceLock<Option<HostPipeline>>,
+    /// Attempts made so far, and the frame a refused one may be retried at.
+    attempts: AtomicU32,
+    retry_at: AtomicU64,
     /// What identifies it across runs (shader containers and state), and
     /// whether a draw or dispatch has requested it yet.
     key: String,
@@ -54,41 +59,72 @@ impl Pending {
             graphics,
             queue_state: AtomicU8::new(NOT_QUEUED),
             made: OnceLock::new(),
+            attempts: AtomicU32::new(0),
+            retry_at: AtomicU64::new(0),
             key: key.finalize().to_hex()[..32].to_owned(),
             used: AtomicBool::new(false),
         }
     }
 
+    /// Makes the host pipeline. A creation the device refused for want of
+    /// memory is not final: the world's mesh pipelines are first asked for
+    /// while the title's textures still hold the device, and the same
+    /// creation succeeds once a frame has passed (the driver reports
+    /// `E_OUTOFMEMORY`, 0x8007000E). So a refusal leaves the pipeline
+    /// unmade and schedules another attempt; a shader that does not
+    /// translate is final, since retrying cannot change it.
     fn make(&self) {
-        self.made
-            .get_or_init(|| HostPipeline::new(&self.shaders, self.graphics.as_deref()));
+        let made = HostPipeline::new(&self.shaders, self.graphics.as_deref());
+        if made.is_none() {
+            let attempt = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+            let retry = self.shaders.iter().all(|s| s.translates()) && attempt < RETRIES;
+            if retry {
+                // Backed off so a device short of memory is not hammered:
+                // 1, 2, 4, ... 64 frames apart.
+                let gap = 1u64 << attempt.min(6);
+                self.retry_at
+                    .store(crate::frame::current().saturating_add(gap), Ordering::Relaxed);
+                self.queue_state.store(NOT_QUEUED, Ordering::Relaxed);
+            } else {
+                // Final: recorded so a wait on it ends at once instead of
+                // spending the frame's budget on an answer already known.
+                let _ = self.made.set(None);
+            }
+        }
+        // Only a made pipeline is recorded: a refusal must leave the cell
+        // empty so `ready` can queue another attempt.
+        if made.is_some() {
+            let _ = self.made.set(made);
+        }
         let (lock, done) = &DONE;
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         done.notify_all();
     }
 }
 
+/// Attempts a refused pipeline gets before it is reported as refused.
+const RETRIES: u32 = 8;
+
 /// Why a pipeline has no host pipeline (diagnostics): its shaders that do
 /// not translate, else "refused" or "being made"; `None` if it has one.
 #[cfg(feature = "diagnostics")]
 pub(crate) fn missing(p: &Pending) -> Option<String> {
-    match p.made.get() {
-        Some(Some(_)) => None,
-        None => Some("being made".into()),
-        Some(None) => {
-            let failed: Vec<String> = p
-                .shaders
-                .iter()
-                .filter(|s| matches!(s.translated.get(), Some(None)))
-                .map(|s| format!("{} {}", s.stage, s.hash))
-                .collect();
-            Some(if failed.is_empty() {
-                format!("refused {:?}", p.shaders)
-            } else {
-                failed.join(" + ")
-            })
-        }
+    if p.made.get().is_some_and(Option::is_some) {
+        return None;
     }
+    let failed: Vec<String> = p
+        .shaders
+        .iter()
+        .filter(|s| !s.translates())
+        .map(|s| format!("{} {}", s.stage, s.hash))
+        .collect();
+    Some(if !failed.is_empty() {
+        failed.join(" + ")
+    } else if p.attempts.load(Ordering::Relaxed) > 0 {
+        format!("refused {:?}", p.shaders)
+    } else {
+        "being made".into()
+    })
 }
 
 /// Signalled whenever a worker has made a pipeline.
@@ -124,6 +160,10 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
         super::library::note_used(&p.key);
     }
     if p.made.get().is_none() {
+        // A refused creation waits out its backoff before it is tried again.
+        if crate::frame::current() < p.retry_at.load(Ordering::Relaxed) {
+            return None;
+        }
         start(p, REQUESTED);
         wait(p, crate::frame::current());
     }
@@ -186,7 +226,9 @@ fn wait(p: &Pending, frame: u64) {
     let started = Instant::now();
     let (lock, done) = &DONE;
     let mut held = lock.lock().unwrap_or_else(|e| e.into_inner());
-    while p.made.get().is_none() {
+    // A refused creation that is waiting out its backoff has no answer
+    // coming: do not spend the frame's budget on it.
+    while p.made.get().is_none() && p.attempts.load(Ordering::Relaxed) == 0 {
         let rest = left.saturating_sub(started.elapsed());
         if rest.is_zero() {
             break;
