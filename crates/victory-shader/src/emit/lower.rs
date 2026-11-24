@@ -982,7 +982,36 @@ impl<'a> Lower<'a> {
             }
             self.mask_ok = self.mask_data == MaskData::Console;
             self.tail[b] = Some(self.cur);
-            self.exit(b)?;
+            // `VICTORY_LENIENT_MASKS`: a terminator that reads a mask the
+            // structure pass could not follow leaves the block with what was
+            // written so far instead of failing the whole program.
+            if let Err(e) = self.exit(b) {
+                let lenient = std::env::var_os("VICTORY_LENIENT_MASKS").is_some();
+                let masked = matches!(
+                    &e,
+                    Stop::Fail(ShaderError::Unsupported { what, .. })
+                        if what.contains("lane mask read as data")
+                );
+                if !(lenient && masked) {
+                    return Err(e);
+                }
+                // The condition the terminator read was the mask that could
+                // not be read: take one successor unconditionally, so the
+                // block still ends and its values keep their place.
+                let to = match self.x.st.exits[b] {
+                    LaneExit::Jump(t) => Some(t),
+                    LaneExit::Branch { taken, .. } => Some(taken),
+                    LaneExit::End | LaneExit::Indirect => None,
+                };
+                match to {
+                    Some(t) => {
+                        let to = self.block[t].expect("reachable");
+                        self.enter_loop(b, t, self.cur);
+                        self.s.m.terminate(self.cur, Term::Br(to));
+                    }
+                    None => self.s.m.terminate(self.cur, Term::Ret),
+                }
+            }
         }
         self.fill_phis()?;
         let user_data = self.user_reads.values().copied().collect();

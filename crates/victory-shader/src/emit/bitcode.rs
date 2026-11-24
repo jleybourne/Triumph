@@ -677,6 +677,12 @@ impl Module {
             }
         }
         post.reverse();
+        // A block the walk does not reach still holds instructions whose
+        // values are read elsewhere; left out, their ids stay unset and the
+        // writer panics on the use. Laid out after the reachable blocks they
+        // keep their ids, and the driver skips them at run time.
+        let unreached: Vec<usize> = (0..self.blocks.len()).filter(|&b| !seen[b]).collect();
+        post.extend(unreached);
         let mut pos = vec![u64::MAX; self.blocks.len()];
         for (n, &b) in post.iter().enumerate() {
             pos[b] = n as u64;
@@ -731,7 +737,13 @@ impl Module {
                 V::Const(i) => funcs + i,
                 V::Inst(i) => {
                     let id = ids[i as usize];
-                    assert_ne!(id, u32::MAX, "use of a void value");
+                    if id == u32::MAX {
+                        let inst = &self.insts[i as usize];
+                        panic!(
+                            "use of a void value: inst {i} type {:?} op {:?}",
+                            inst.ty, inst.op
+                        );
+                    }
                     id
                 }
             }
