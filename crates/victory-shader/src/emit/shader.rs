@@ -37,6 +37,17 @@ pub const ROOT_CBV_SPACE: u32 = 1;
 /// (one [`StrideEntry`] per view-heap slot).
 pub const STRIDE_SPACE: u32 = 2;
 
+/// Descriptor dwords a shader reads as numbers (a size, a stride, a count) that
+/// no bound view can answer: the host fills this table per draw, eight dwords
+/// per descriptor slot the shader asks about, and the shader reads them where
+/// the console read the descriptor's own memory.
+pub const DESC_DATA_SPACE: u32 = 3;
+
+/// Dwords the host publishes per descriptor: the console descriptor is four
+/// dwords for a buffer and eight for an image; the image fields the code reads
+/// (size, levels, depth) live in the first five.
+pub const DESC_DATA_WORDS: u32 = 8;
+
 /// What the host writes per view-heap slot in the runtime stride table, for
 /// buffers a shader reads without a stride known when it was translated.
 ///
@@ -163,6 +174,11 @@ pub(crate) struct Shader {
     pub root_srvs: Vec<(u8, V)>,
     /// Handle of the runtime stride table (`t0`, [`STRIDE_SPACE`]), if read.
     pub stride_table: Option<V>,
+    /// Root parameters whose descriptor the shader reads as numbers, in the
+    /// order the host publishes them ([`DESC_DATA_SPACE`]).
+    pub descriptor_data: Vec<u8>,
+    /// Its handle, made once.
+    descriptor_data_handle: Option<V>,
     pub flags: u64,
     /// Heap handles made with a non-uniform index.
     pub nonuniform_handles: u32,
@@ -231,6 +247,8 @@ impl Shader {
             root_cbvs: Vec::new(),
             root_srvs: Vec::new(),
             stride_table: None,
+            descriptor_data: Vec::new(),
+            descriptor_data_handle: None,
             flags: 0,
             nonuniform_handles: 0,
             threads: None,
@@ -367,6 +385,28 @@ impl Shader {
     /// The handle of the host's runtime stride table (`t0` in
     /// [`STRIDE_SPACE`], a raw buffer of [`StrideEntry`] words indexed by
     /// view-heap slot).
+    /// The handle of the host's descriptor-data table ([`DESC_DATA_SPACE`]).
+    pub fn descriptor_data_handle(&mut self) -> V {
+        if let Some(h) = self.descriptor_data_handle {
+            return h;
+        }
+        let z = self.m.i32(0);
+        let bind = [z, z, self.m.i32(DESC_DATA_SPACE), self.m.i8(0)];
+        let bind = self.m.aggregate(self.t.bind, &bind);
+        let f = self.m.bool(false);
+        let block = self.entry;
+        let h = self.op(
+            block,
+            "createHandleFromBinding",
+            Attr::ReadNone,
+            self.t.handle,
+            217,
+            &[bind, z, f],
+        );
+        self.descriptor_data_handle = Some(h);
+        h
+    }
+
     pub fn stride_table_handle(&mut self) -> V {
         if let Some(h) = self.stride_table {
             return h;

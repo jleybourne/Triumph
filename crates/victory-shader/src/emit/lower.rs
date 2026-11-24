@@ -36,6 +36,8 @@ pub(crate) struct Lowered {
     pub root_cbvs: Vec<u8>,
     pub root_srvs: Vec<u8>,
     pub stride_table: bool,
+    /// Root parameters whose descriptor the shader reads as numbers.
+    pub descriptor_data: Vec<u8>,
     pub user_data: Vec<UserData>,
     pub samplers: Vec<[u32; 4]>,
     /// Heap handles made with a non-uniform index.
@@ -952,6 +954,7 @@ impl<'a> Lower<'a> {
             root_cbvs,
             root_srvs,
             stride_table,
+            descriptor_data: self.s.descriptor_data.clone(),
             #[cfg(test)]
             nonuniform_handles: self.s.nonuniform_handles,
             #[cfg(test)]
@@ -3118,7 +3121,58 @@ impl<'a> Lower<'a> {
                 })
             });
         let Some((at, first)) = use_at else {
-            return Err("a descriptor read only as data");
+            // Read only as numbers: no use names a view to ask for the size,
+            // stride or count the code computes from. The host publishes the
+            // descriptor's own dwords through [`super::DESC_DATA_SPACE`], eight
+            // per entry, and the load reads them where the console read the
+            // descriptor's memory.
+            let Some(param) = self.scalar.get(&site).map(|a| a.param) else {
+                return Err("a descriptor read only as data");
+            };
+            if param == CODE {
+                return Err("a descriptor read only as data");
+            }
+            let entry = match self.s.descriptor_data.iter().position(|&p| p == param as u8) {
+                Some(n) => n,
+                None => {
+                    self.s.descriptor_data.push(param as u8);
+                    self.s.descriptor_data.len() - 1
+                }
+            };
+            let c = self.cur;
+            let table = self.s.descriptor_data_handle();
+            let base = self.s.m.i32((entry as u32 * super::DESC_DATA_WORDS) as i32 as u32);
+            // The load's own dword offset inside the descriptor.
+            let at_word: u32 = match inst.fields {
+                Fields::Smem { offset, .. } => (offset as u32) / 4,
+                _ => 0,
+            };
+            let iu = self.s.m.undef(self.s.t.i32);
+            let mask = self.s.m.i8(3);
+            let align = self.s.m.i32(4);
+            for k in 0..count {
+                let rel = k + at_word;
+                let idx = if rel == 0 {
+                    base
+                } else {
+                    let kk = self.s.m.i32(rel);
+                    self.s.m.bin(c, Bin::Add, base, kk)
+                };
+                let bytes = self.s.m.i32(4);
+                let addr = self.s.m.bin(c, Bin::Mul, idx, bytes);
+                let res = self.s.op(
+                    c,
+                    "rawBufferLoad.f32",
+                    Attr::ReadOnly,
+                    self.s.t.res_ret,
+                    139,
+                    &[table, addr, iu, mask, align],
+                );
+                let x = self.s.m.extract(c, res, 0);
+                let x = self.as_int(x);
+                self.write(inst, Reg::S(code + k as u8), x, None);
+            }
+            return Ok(());
         };
         let src = Source::Loaded { load: site, first };
         let used = self.used_kind(&src);

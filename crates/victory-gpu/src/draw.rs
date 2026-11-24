@@ -535,6 +535,39 @@ impl State {
                     }
                 }
             }
+            if let Some((param, params)) = &stage.descriptor_data {
+                if self.heaps[0] == 0 {
+                    once!("a shader reads descriptor words without a host view heap");
+                    return false;
+                }
+                let Some(heap) = crate::descriptor::heap(self.heaps[0] as This).host() else {
+                    once!("a shader reads descriptor words without a host view heap");
+                    return false;
+                };
+                // Publish each parameter's descriptor: the title's own dwords,
+                // read from the memory it mirrored the slot from.
+                for (n, &rp) in params.iter().enumerate() {
+                    let index = self.user_value(compute, rp, RootType::Table, 0);
+                    let Some(addr) = heap.slot_address(index) else { continue };
+                    let Some(words) = crate::shadow::peek(addr, 8) else { continue };
+                    let mut w = [0u32; 8];
+                    let n_ = words.len().min(8);
+                    w[..n_].copy_from_slice(&words[..n_]);
+                    heap.set_descriptor_words(n as u32, &w);
+                }
+                let Some(gpu) = heap.descriptor_data_gpu() else {
+                    once!("descriptor data table unavailable");
+                    return false;
+                };
+                // SAFETY: an open list; the table lives with the host heap.
+                unsafe {
+                    if compute {
+                        l.SetComputeRootShaderResourceView(*param, gpu);
+                    } else {
+                        l.SetGraphicsRootShaderResourceView(*param, gpu);
+                    }
+                }
+            }
             if let Some(param) = stage.stride_table {
                 let gpu = (self.heaps[0] != 0)
                     .then(|| crate::descriptor::heap(self.heaps[0] as This).host())

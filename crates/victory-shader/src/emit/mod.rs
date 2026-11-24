@@ -98,7 +98,8 @@ use crate::{ShaderError, io, ir, resource, structure};
 
 pub use sampler::StaticSampler;
 pub use shader::{
-    ROOT_CBV_SPACE, RawWindow, SAMPLER_SPACE, STRIDE_SPACE, StrideEntry, USER_DATA_SPACE,
+    DESC_DATA_SPACE, DESC_DATA_WORDS, ROOT_CBV_SPACE, RawWindow, SAMPLER_SPACE, STRIDE_SPACE, StrideEntry,
+    USER_DATA_SPACE,
 };
 
 /// The loop limit without an override: 2^20.
@@ -161,6 +162,10 @@ pub struct HostShader {
     /// True when the shader reads the runtime stride table (`t0` in
     /// [`STRIDE_SPACE`]).
     pub stride_table: bool,
+    /// Root parameters whose descriptor the shader reads as numbers: the host
+    /// publishes those descriptors' dwords through [`DESC_DATA_SPACE`], eight
+    /// per entry, in this order.
+    pub descriptor_data: Vec<u8>,
 }
 
 impl HostShader {
@@ -314,6 +319,7 @@ pub fn emit(
         root_cbvs: l.root_cbvs,
         root_srvs: l.root_srvs,
         stride_table: l.stride_table,
+        descriptor_data: l.descriptor_data,
     })
 }
 

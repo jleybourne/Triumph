@@ -233,6 +233,10 @@ fn encode(s: &HostShader) -> Vec<u8> {
         out.extend(slots);
     }
     word(&mut out, u32::from(s.stride_table));
+    word(&mut out, s.descriptor_data.len() as u32);
+    for &p in &s.descriptor_data {
+        word(&mut out, u32::from(p));
+    }
     out
 }
 
@@ -290,6 +294,11 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
     let root_cbvs = r.list()?;
     let root_srvs = r.list()?;
     let stride_table = r.word()? != 0;
+    let n = r.word()? as usize;
+    let mut descriptor_data = Vec::with_capacity(n);
+    for _ in 0..n {
+        descriptor_data.push(r.word()? as u8);
+    }
     r.0.is_empty().then_some(HostShader {
         stage,
         dxil,
@@ -299,6 +308,7 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
         root_cbvs,
         root_srvs,
         stride_table,
+        descriptor_data,
     })
 }
 

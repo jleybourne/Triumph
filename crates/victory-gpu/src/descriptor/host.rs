@@ -38,6 +38,10 @@ pub(crate) struct HostHeap {
     /// Per slot, what shaders need to read a buffer whose stride shader
     /// analysis could not recover statically ([`StrideEntry`]).
     strides: Option<StrideTable>,
+    /// Descriptor dwords published for shaders that read them as numbers.
+    desc_data: Option<DescTable>,
+    /// The title address each slot was last mirrored from.
+    addresses: Mutex<Vec<u64>>,
     /// The first of the [`ALIASES`] slots after the dynamic ones (view
     /// heaps), and which slots have a raw view there.
     alias_base: u32,
@@ -120,6 +124,55 @@ impl StrideTable {
             gpu,
             len,
         })
+    }
+}
+
+/// The descriptor dwords the host publishes to shaders that read a descriptor
+/// as numbers: [`crate::pipeline::DESC_DATA_WORDS`] dwords per entry, one entry
+/// per root parameter the shader asked about.
+struct DescTable {
+    _resource: ID3D12Resource,
+    ptr: usize,
+    gpu: u64,
+    len: u32,
+}
+
+impl DescTable {
+    fn new(device: &ID3D12Device, len: u32) -> Option<Self> {
+        let bytes = (u64::from(len) * 8 * 4).max(8);
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Width: bytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            ..Default::default()
+        };
+        let mut resource: Option<ID3D12Resource> = None;
+        let mut p = std::ptr::null_mut();
+        // SAFETY: plain committed upload buffer creation and persistent CPU map.
+        let gpu = unsafe {
+            device
+                .CreateCommittedResource(
+                    &D3D12_HEAP_PROPERTIES {
+                        Type: D3D12_HEAP_TYPE_UPLOAD,
+                        ..Default::default()
+                    },
+                    D3D12_HEAP_FLAG_NONE,
+                    &desc,
+                    D3D12_RESOURCE_STATE_GENERIC_READ,
+                    None,
+                    &mut resource,
+                )
+                .ok()?;
+            let res = resource.as_ref()?;
+            res.Map(0, None, Some(&mut p)).ok()?;
+            std::ptr::write_bytes(p.cast::<u8>(), 0, bytes as usize);
+            res.GetGPUVirtualAddress()
+        };
+        Some(Self { _resource: resource?, ptr: p as usize, gpu, len })
     }
 }
 
@@ -273,6 +326,8 @@ impl HostHeap {
             u64::from(step),
             sampler,
         ));
+        let desc_data = if sampler { None } else { DescTable::new(&host.device, 64) };
+        let addresses = Mutex::new(vec![0u64; count as usize]);
         let strides = if sampler {
             None
         } else {
@@ -289,6 +344,8 @@ impl HostHeap {
             kept: Mutex::new(vec![None; (count + extra) as usize]),
             next: Mutex::new((0, vec![false; extra as usize])),
             strides,
+            desc_data,
+            addresses,
             alias_base: count + extra,
             aliases: Mutex::new(Aliases {
                 of: HashMap::new(),
@@ -525,7 +582,33 @@ impl HostHeap {
     /// if it changed since, and returns the view recorded there. Buffer
     /// views are made only for draws (`for_draw`), which also copy their
     /// data: a host copy of a buffer is made on first use.
+    /// The title address slot `index` was last mirrored from.
+    pub(crate) fn slot_address(&self, index: u32) -> Option<u64> {
+        let a = self.addresses.lock().unwrap_or_else(|e| e.into_inner());
+        a.get(index as usize).copied().filter(|&x| x != 0)
+    }
+
+    /// Where the host publishes descriptor dwords for shaders that read them
+    /// as numbers, and a writer for one entry.
+    pub(crate) fn descriptor_data_gpu(&self) -> Option<u64> {
+        self.desc_data.as_ref().map(|t| t.gpu)
+    }
+
+    pub(crate) fn set_descriptor_words(&self, entry: u32, words: &[u32; 8]) {
+        let Some(t) = &self.desc_data else { return };
+        if entry >= t.len {
+            return;
+        }
+        // SAFETY: the entry lies in the mapped upload buffer.
+        unsafe {
+            (t.ptr as *mut [u32; 8]).add(entry as usize).write(*words);
+        }
+    }
+
     pub(crate) fn mirror(&self, index: u32, handle: u64, for_draw: bool) -> Option<View> {
+        if let Some(a) = self.addresses.lock().unwrap_or_else(|e| e.into_inner()).get_mut(index as usize) {
+            *a = handle;
+        }
         if index >= self.count {
             // Diagnostic (NVIDIA heap cap): the highest title slot past the
             // host heap seen so far.
