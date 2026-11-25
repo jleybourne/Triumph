@@ -19,6 +19,14 @@ total          283-294 ms
 The card and the host now overlap (asynchronous submission), so the total is
 not their sum. Recording is the largest single line, then the card.
 
+## Run to run
+
+The same build and switches vary by about 40 percent between runs: one run of
+the README's combo read 295-306 ms and the next read 374-743 ms, with the
+room at the same draw count both times. Anything under about 50 ms of
+difference is noise here and must not be read as a gain; compare medians over
+several runs, not single frames.
+
 ## What moved it, in order
 
 ```
