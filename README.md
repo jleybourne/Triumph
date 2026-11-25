@@ -39,17 +39,25 @@ This project refers to the game it runs as **New Game 6**.
 
 ## Project status
 
-**The world renders, lit, with nothing dropped: 6 to 8 fps, about 360 ms per frame.**
+**The world renders, lit and textured, with nothing dropped: about 317-339 ms a frame
+in the world (just under 3 fps).**
 
-Measured on the machine below, 2026-11-25, plain launch, no switches set:
+Measured on the machine below, 2026-11-25, plain launch, no switches set. The CPU
+path was 473-733 ms a frame before this round and 265-285 ms now; the frame is bound
+by the card.
 
 ```
-Americas | Victory  6 fps  387.8 ms/frame  5011 draws/frame
-Americas | Victory  8 fps  356.4 ms/frame  4934 draws/frame
-host pipelines made 2,428 (1,626 graphics and compute, 802 mesh)
-host pipelines refused 0        shaders that do not translate 8
-device removals 0               unhandled exceptions 0
+Americas | Victory  316.5 ms/frame  4768 draws/frame
+Americas | Victory  338.6 ms/frame  4768 draws/frame
+host pipelines refused 0        device removals 0
+unhandled exceptions 0          textures on the card
 ```
+
+Two profiles are selectable (`--console`): `pc`, the default, reports this machine's
+own card read from DXGI at launch; `series-x` reports the console's 10 GiB + 3.5 GiB.
+Measured on the same room: pc 316-339 ms, series-x 366-380 ms. Reporting a single
+memory pool instead of two made the title allocate 23.3 GB and run at 455-470 ms --
+the pool shape matters, which is why `pc` keeps Series X's.
 
 | What | Status |
 |---|---|
@@ -61,7 +69,7 @@ device removals 0               unhandled exceptions 0
 | Input: movement, camera, pause menu (pad and keyboard) | ✅ Works |
 | World draws submitted | ✅ 4,934–6,990 draws/frame |
 | Host pipelines | ✅ **0 refused.** Every pipeline the world asks for is created (2,428 made) |
-| Frame time in the world | ⚠️ **356–388 ms/frame (6–8 fps)** on a plain launch — the budget is ~16 ms |
+| Frame time in the world | ⚠️ **316–339 ms/frame (~3 fps)** on a plain launch — the budget is ~16 ms |
 | Ray-traced lighting | ⚠️ The structure builder **runs** (53/53 programs) and shadows resolve; the second-order terms — bounce on interior walls, light shafts — are thin because four volumetric and water programs still do not translate. See `docs/remaining-shaders.md` |
 | Old note | Everything the sun does not hit directly was black: the title's ray-traced bounce light and ray-traced lamp/shadow passes do not run yet |
 | The first gameplay room after the cutscene hands over | ⚠️ Sometimes not drawn |
