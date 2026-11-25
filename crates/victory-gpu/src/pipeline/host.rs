@@ -34,6 +34,50 @@ pub(crate) struct GraphicsState {
     samples: DXGI_SAMPLE_DESC,
 }
 
+impl GraphicsState {
+    /// The same for two states that would make the same pipeline, so one host
+    /// pipeline can serve both. Every field of the state is folded in.
+    pub(crate) fn fingerprint(&self) -> u64 {
+        fn eat(mut h: u64, bytes: &[u8]) -> u64 {
+            for b in bytes {
+                h ^= u64::from(*b);
+                h = h.wrapping_mul(0x100_0000_01b3);
+            }
+            h
+        }
+        // SAFETY: the state's own plain-old-data fields, read as bytes.
+        unsafe fn pixels<T>(v: &T) -> &[u8] {
+            // SAFETY: the caller hands a plain-old-data field of this state.
+            unsafe {
+                std::slice::from_raw_parts(
+                    std::ptr::from_ref(v).cast::<u8>(),
+                    std::mem::size_of::<T>(),
+                )
+            }
+        }
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        // SAFETY: as above, each of these is a plain struct of numbers.
+        unsafe {
+            h = eat(h, pixels(&self.blend));
+            h = eat(h, pixels(&self.rasterizer));
+            h = eat(h, pixels(&self.depth));
+            h = eat(h, pixels(&self.targets));
+            h = eat(h, pixels(&self.samples));
+            h = eat(h, &self.sample_mask.to_le_bytes());
+            h = eat(h, &(self.strip_cut.0 as u32).to_le_bytes());
+            h = eat(h, &(self.topology.0 as u32).to_le_bytes());
+            h = eat(h, &(self.depth_format.0 as u32).to_le_bytes());
+            for input in &self.inputs {
+                h = eat(h, pixels(input));
+            }
+        }
+        for name in &self.names {
+            h = eat(h, name.as_bytes());
+        }
+        h
+    }
+}
+
 impl Default for GraphicsState {
     fn default() -> Self {
         let target = D3D12_RENDER_TARGET_BLEND_DESC {

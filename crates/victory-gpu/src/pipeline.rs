@@ -544,9 +544,39 @@ fn hand_out(
 ) -> HRESULT {
     tracing::trace!(?shaders, "pipeline state");
     #[cfg(windows)]
-    let host = Arc::new(make::Pending::new(shaders.clone(), graphics));
-    #[cfg(windows)]
-    make::early(&host);
+    let host = {
+        // The title asks for the same pipeline again and again (see
+        // VICTORY_RECENT_FILE's record); one host pipeline serves every ask
+        // that would make the same thing, so a driver compile is spent once.
+        static SHARED: std::sync::Mutex<Option<std::collections::HashMap<u64, Arc<make::Pending>>>> =
+            std::sync::Mutex::new(None);
+        fn mix(mut h: u64, v: u64) -> u64 {
+            for b in v.to_le_bytes() {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x100_0000_01b3);
+            }
+            h
+        }
+        let mut key = graphics
+            .as_ref()
+            .map(|g| g.fingerprint())
+            .unwrap_or(0xcbf2_9ce4_8422_2325);
+        key = mix(key, shaders.len() as u64);
+        for shader in &shaders {
+            key = mix(key, u64::from_str_radix(&shader.hash, 16).unwrap_or(0));
+        }
+        let mut shared = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        let shared = shared.get_or_insert_with(std::collections::HashMap::new);
+        match shared.get(&key).cloned() {
+            Some(host) => host,
+            None => {
+                let host = Arc::new(make::Pending::new(shaders.clone(), graphics));
+                make::early(&host);
+                shared.insert(key, host.clone());
+                host
+            }
+        }
+    };
     #[cfg(windows)]
     let builder = of_builder(&shaders);
     #[cfg(windows)]
