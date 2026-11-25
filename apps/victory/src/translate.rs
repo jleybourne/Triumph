@@ -165,6 +165,22 @@ pub fn run(
     if let Some(n) = std::env::var("VICTORY_HOST_MAX_WAVE").ok().and_then(|v| v.parse().ok()) {
         victory_shader::emit::set_host_max_wave(n);
     }
+    // `--pipelines` writes the pipelines it makes into the library the
+    // runtime loads (`<data_dir>/pipelines`), so a run after this one finds
+    // them on disk instead of compiling them as it goes: the warming the
+    // AMD forks do with a command of their own.
+    if pipelines {
+        match victory_core::config::Config::load() {
+            Ok(cfg) => match cfg.cache_subdir("pipelines") {
+                Ok(dir) => {
+                    victory_gpu::pipeline::use_pipeline_cache(dir.clone());
+                    eprintln!("pipelines are kept in {}", dir.display());
+                }
+                Err(e) => eprintln!("no pipeline cache directory: {e}"),
+            },
+            Err(e) => eprintln!("no configuration to find the pipeline cache: {e}"),
+        }
+    }
     let dll = validate.then(Validator::default_path).flatten();
     if validate {
         Validator::load(dll.as_deref()).map_err(anyhow::Error::msg)?;
