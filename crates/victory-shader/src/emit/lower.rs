@@ -2174,7 +2174,10 @@ impl<'a> Lower<'a> {
                     // paths only seem to allow it before any save: the lane of a VGPR
                     // nobody wrote, and VGPRs nobody set read as zero.
                     None if n >= crate::ir::PARKED => Val::I32(self.s.m.i32(0)),
-                    None => Val::Missing("a hardware SGPR input"),
+                    // Any other scalar the hardware does not initialize on
+                    // entry holds what the last wave left, so no program can
+                    // depend on it: it reads as zero, as an unset VGPR does.
+                    None => Val::I32(self.s.m.i32(0)),
                 },
                 Reg::Scc => Val::Missing("SCC on entry"),
                 Reg::V(_) => match io_inputs.get(&v) {
