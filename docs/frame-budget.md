@@ -61,6 +61,23 @@ copies 97.8 to 87.3 ms; the world's copies average 18 KB over 12,073 a frame).
   `fx-main-attempt`; it needs its switches settled against this tree, not a
   blind merge.
 
+## Traps: faster frames that are not wins
+
+- **`--console series-s`: 195 ms against 290, and a black screen.** The title
+  takes a different content path at the lower tier, and what it draws there
+  does not come out. The speed is missing geometry, not efficiency. Verified
+  from a presented frame: 5 fps, 4,361 draws, nothing on screen.
+- **The DXIL optimiser commit from triippywhale's line (`e057a00`, block
+  merging, disjoint load caches, exact folding):** applies without conflict
+  and passes 248 shader tests, but the world never loads -- 3 draws after
+  eleven minutes against 4,900 for this tree. Kept as
+  `D:\victory-work\patches\dxil-optimiser-e057a00.patch`.
+- **`--console series-x`:** 366-380 ms, correct, slower than the PC profile.
+- **The `fxceless/victory-fork` host rewrite:** 666-2,071 ms, already noted.
+
+The rule these give: a frame time that drops without the draw count and the
+presented image holding up is not a frame time, it is missing work.
+
 ## The remaining floor
 
 Recording, at about 55 microseconds a draw. The card's work is the shader
