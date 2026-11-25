@@ -165,6 +165,10 @@ mod device_type {
         match console {
             Console::SeriesX => 0x64,
             Console::SeriesS => 0x60,
+            // The PC profile is Series X's device type (its quality settings)
+            // with this machine's own memory reported: the title sizes its
+            // allocations from the memory query, not the device type.
+            Console::Pc => 0x64,
         }
     }
 

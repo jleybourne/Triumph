@@ -119,6 +119,8 @@ enum Unimplemented {
 enum Console {
     SeriesX,
     SeriesS,
+    /// The host card: the title is told this machine's real memory.
+    Pc,
 }
 
 fn main() -> Result<()> {
