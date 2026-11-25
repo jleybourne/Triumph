@@ -40,6 +40,22 @@ fn clock() -> std::sync::MutexGuard<'static, Option<Clock>> {
     CLOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Whether the title's frame interval is ignored so frames come as fast as
+/// they can (`VICTORY_UNCAPPED=1`). The interval is the console's pacing:
+/// a title waits for a tick to reach the display before it builds the next
+/// frame. Nothing needs that here, and honouring it costs whatever the
+/// title asked for even when a frame was ready sooner.
+fn uncapped() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var_os("VICTORY_UNCAPPED").is_some_and(|v| v != "0");
+        if on {
+            tracing::info!("frame interval ignored: frames as fast as they come");
+        }
+        on
+    })
+}
+
 /// Device method: a frame every `length` microseconds. The period is how
 /// many intervals a frame may take to reach the display (pipeline depth),
 /// not part of the rate.
@@ -50,9 +66,15 @@ pub(crate) extern "system" fn set_interval(
     _period: u32,
     _flags: u32,
 ) -> HRESULT {
-    let interval = match length {
-        0 => SIXTIETH,
-        us => Duration::from_micros(u64::from(us)),
+    let interval = if uncapped() {
+        // As fast as the host can present: one tick per millisecond is the
+        // floor, so a wait never blocks on the display's own pacing.
+        Duration::from_micros(1000)
+    } else {
+        match length {
+            0 => SIXTIETH,
+            us => Duration::from_micros(u64::from(us)),
+        }
     };
     tracing::info!(?interval, "frame interval");
     // A new interval starts from now, after the last tick handed out.

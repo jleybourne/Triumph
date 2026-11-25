@@ -373,6 +373,28 @@ pub(crate) static HEAP_TEXTURES_WAITING: AtomicU64 = AtomicU64::new(0);
 /// (`crate::resource::room`), for the memory line.
 pub(crate) static HEAP_TEXTURES_FULL: AtomicU64 = AtomicU64::new(0);
 
+/// How many textures one frame may fingerprint (`VICTORY_RECHECK_PER_FRAME`,
+/// default 512). A look reads 48 KiB of title memory for its slot, and a
+/// whole batch at once cost hundreds of milliseconds a frame; a slot over
+/// the limit is looked at on a later frame instead.
+fn recheck_room() -> bool {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEEN: AtomicU64 = AtomicU64::new(u64::MAX);
+    static USED: AtomicU64 = AtomicU64::new(0);
+    static LIMIT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let limit = *LIMIT.get_or_init(|| {
+        std::env::var("VICTORY_RECHECK_PER_FRAME")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(512)
+    });
+    let frame = crate::frame::current();
+    if SEEN.swap(frame, Ordering::Relaxed) != frame {
+        USED.store(0, Ordering::Relaxed);
+    }
+    USED.fetch_add(1, Ordering::Relaxed) < limit
+}
+
 /// Frames after a whole upload of a texture picked by index at which its
 /// memory is looked at again, each counted from the look before.
 const RECHECK_FRAMES: [u64; 5] = [4, 12, 40, 120, 400];
@@ -1801,7 +1823,9 @@ impl State {
             // only a changed texture is uploaded again.
             // `VICTORY_HEAP_RECHECK=0`: uploaded once, as before.
             if let Some((at, len, print, looks, uploaded)) = host.texture_slot_checked(index) {
-                if crate::texture::fingerprint(at, len) == print {
+                // Over the frame's budget: treated as unchanged, so the slot is
+                // looked at again on its next scheduled frame.
+                if !recheck_room() || crate::texture::fingerprint(at, len) == print {
                     HEAP_TEXTURES_RECHECKED[0].fetch_add(1, Ordering::Relaxed);
                     match RECHECK_FRAMES.get(usize::from(looks) + 1) {
                         Some(wait) => {
