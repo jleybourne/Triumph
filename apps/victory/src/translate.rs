@@ -319,7 +319,14 @@ pub fn run(
     for (reason, (n, example)) in failed {
         println!("  {n:>7}  {reason}  (e.g. {example})");
     }
+    if pipelines {
+        // The library writes on a timer; this run ends before it, so what it
+        // made is written here or lost.
+        victory_gpu::pipeline::save_pipeline_cache();
+        eprintln!("pipelines saved");
+    }
     Ok(())
+
 }
 
 fn translate(
