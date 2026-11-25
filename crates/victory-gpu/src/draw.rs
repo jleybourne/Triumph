@@ -634,6 +634,24 @@ impl State {
     /// on the host list at once, and kept for [`State::replay`].
     pub(crate) fn set_viewports(&mut self, list: &HostList, viewports: &[D3D12_VIEWPORT]) {
         self.viewports.clear();
+        if crate::render_scale::scaled() {
+            // The targets are made smaller (`render_scale`), so the viewport
+            // has to be too, or geometry lands outside them.
+            let scaled: Vec<D3D12_VIEWPORT> = viewports
+                .iter()
+                .map(|v| D3D12_VIEWPORT {
+                    TopLeftX: crate::render_scale::pos(v.TopLeftX),
+                    TopLeftY: crate::render_scale::pos(v.TopLeftY),
+                    Width: crate::render_scale::pos(v.Width),
+                    Height: crate::render_scale::pos(v.Height),
+                    MinDepth: v.MinDepth,
+                    MaxDepth: v.MaxDepth,
+                })
+                .collect();
+            self.viewports.extend_from_slice(&scaled);
+            crate::draw::viewports(list, &scaled);
+            return;
+        }
         self.viewports.extend_from_slice(viewports);
         crate::draw::viewports(list, viewports);
     }
@@ -652,6 +670,21 @@ impl State {
                 bottom: 16384,
             };
             crate::draw::scissors(list, &vec![full; rects.len()]);
+            return;
+        }
+        if crate::render_scale::scaled() {
+            let scaled: Vec<RECT> = rects
+                .iter()
+                .map(|r| RECT {
+                    left: crate::render_scale::len(r.left.max(0) as u32) as i32,
+                    top: crate::render_scale::len(r.top.max(0) as u32) as i32,
+                    right: crate::render_scale::len(r.right.max(0) as u32) as i32,
+                    bottom: crate::render_scale::len(r.bottom.max(0) as u32) as i32,
+                })
+                .collect();
+            self.scissors.clear();
+            self.scissors.extend_from_slice(&scaled);
+            crate::draw::scissors(list, &scaled);
             return;
         }
         crate::draw::scissors(list, rects);

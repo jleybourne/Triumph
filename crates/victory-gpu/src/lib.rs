@@ -26,6 +26,7 @@ pub mod device;
 mod draw;
 pub mod dxgi;
 pub mod recent;
+pub mod render_scale;
 pub mod fence;
 pub mod frame;
 #[cfg(windows)]
