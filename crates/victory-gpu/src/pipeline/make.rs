@@ -161,7 +161,11 @@ fn wait_budget() -> Duration {
         let millis = std::env::var("VICTORY_PIPELINE_WAIT_MS")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(500);
+            // 24 ms, not 500: a frame that waits on a driver compile stalls
+            // for as long as it takes, and several in a row were the 7 to 8
+            // second frames measured in the world. The pipeline finishes on
+            // the worker and the draw takes it on a later frame.
+            .unwrap_or(24);
         tracing::info!(millis, "host pipeline wait budget per frame");
         Duration::from_millis(millis)
     })
