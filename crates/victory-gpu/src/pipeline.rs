@@ -294,7 +294,7 @@ pub(crate) fn builder_off(why: &'static str) {
 #[cfg(windows)]
 pub(crate) fn builder_runs() -> bool {
     static ALLOWED: OnceLock<bool> = OnceLock::new();
-    if !*ALLOWED.get_or_init(|| std::env::var_os("VICTORY_BVH_BUILDER").is_some_and(|v| v == "1")) {
+    if !*ALLOWED.get_or_init(|| std::env::var_os("VICTORY_BVH_BUILDER").is_none_or(|v| v != "0")) {
         return false;
     }
     let mut b = BUILDER.lock().unwrap_or_else(|e| e.into_inner());
@@ -310,7 +310,7 @@ pub(crate) fn builder_runs() -> bool {
                 .ok()
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .filter(|n| *n > 0)
-                .unwrap_or(1)
+                .unwrap_or(600)
         });
         if *every > 1 {
             let frame = crate::queue::presented();
