@@ -213,7 +213,8 @@ pub(crate) struct State {
     scissors: Vec<RECT>,
     blend: Option<[f32; 4]>,
     stencil: Option<u32>,
-    depth_bounds: Option<[f32; 2]>,
+    /// The depth bounds the title set (the list's own are 0 to 1).
+    bounds: Option<(f32, f32)>,
     /// The indirect records clamped last, if later draws may still read
     /// them ([`windows`]).
     window: Option<Window>,
@@ -362,6 +363,66 @@ pub(crate) static HEAP_VIEWS_ELSEWHERE: AtomicU64 = AtomicU64::new(0);
 /// Passes over the view heap's buffer views for shaders that pick them by
 /// index ([`State::heap_buffers`]), and the microseconds they took.
 pub(crate) static HEAP_BUFFER_PASSES: AtomicU64 = AtomicU64::new(0);
+/// Per host view heap (its address): the spans of the host copies that its
+/// unordered access buffer views show, as the last pass over the heap
+/// found them ([`State::heap_buffers`]).
+#[allow(clippy::type_complexity)]
+static HEAP_UNORDERED: std::sync::Mutex<
+    Option<std::collections::HashMap<usize, Vec<(std::sync::Arc<crate::shadow::Shadow>, u64, u64)>>>,
+> = std::sync::Mutex::new(None);
+/// Per host view heap (its address): the spans of host copies its buffer
+/// views show, as the last pass found them, for [`heap_every_list`].
+#[allow(clippy::type_complexity)]
+static HEAP_SPANS: std::sync::Mutex<
+    Option<std::collections::HashMap<usize, Vec<(std::sync::Arc<crate::shadow::Shadow>, u64, u64)>>>,
+> = std::sync::Mutex::new(None);
+/// Refreshes of those spans in lists after the frame's first
+/// ([`heap_every_list`]), since the last frame-rate line.
+pub(crate) static HEAP_LATE_REFRESHES: AtomicU64 = AtomicU64::new(0);
+
+/// Whether every list that runs a shader picking buffers by index brings
+/// the heap's buffer views up to date, not only the frame's first
+/// (`VICTORY_HEAP_EVERY_LIST=1`; off by default until a run prices it).
+///
+/// On the console a shader reads the title's memory as it is when the
+/// shader runs. The pass over the heap's views runs once a frame (per list
+/// it cost 18 s a frame, run 11), so what the title writes into such
+/// buffers after the frame's first list was seen a frame late: per-frame
+/// constants and instance records one frame stale. With the switch, later
+/// lists of the frame refresh the spans the frame's pass found, for
+/// memory that is write-watched or guarded (only pages the title wrote are
+/// copied); memory that is neither is still copied once a frame.
+fn heap_every_list() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_EVERY_LIST").is_some_and(|v| v == "1"))
+}
+
+/// Lists that ran a shader that picks buffers by index and can store, and
+/// the bytes of the heap's unordered views they had (declared written with
+/// [`heap_writes`], only counted without), since the last frame-rate line.
+pub(crate) static HEAP_WRITE_LISTS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static HEAP_WRITE_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Whether what shaders store through buffer views they pick from the view
+/// heap by a computed index (SM 6.6 dynamic resources) goes back into
+/// title memory (`VICTORY_HEAP_WRITES=1`; off by default until a run shows
+/// what it costs).
+///
+/// On the console the view names title memory itself, so the store is in
+/// the title's memory at once, for the CPU and for every other view of the
+/// same bytes. Here it lands in the host copy the view shows, and only
+/// ranges declared written ([`crate::shadow::Shadow::gpu_writes`]: table
+/// views, root views, raw addresses) are compared and copied back after
+/// the submission. A picked view was never declared: the title never saw
+/// such a store, another host copy of the same memory (a window, a texture)
+/// kept the old bytes, and the next refresh of a page the title wrote put
+/// the title's whole 64 KiB over the shader's results. With the switch, a
+/// list that runs a picking shader that can store declares the spans of
+/// the heap's unordered buffer views written.
+fn heap_writes() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_WRITES").is_some_and(|v| v == "1"))
+}
 pub(crate) static HEAP_BUFFER_MICROS: AtomicU64 = AtomicU64::new(0);
 /// Textures brought up to date for shaders that pick them by index
 /// ([`State::heap_textures`]), the bytes of their memory, and the slots
@@ -372,28 +433,6 @@ pub(crate) static HEAP_TEXTURES_WAITING: AtomicU64 = AtomicU64::new(0);
 /// Passes that made no texture because the card had no room
 /// (`crate::resource::room`), for the memory line.
 pub(crate) static HEAP_TEXTURES_FULL: AtomicU64 = AtomicU64::new(0);
-
-/// How many textures one frame may fingerprint (`VICTORY_RECHECK_PER_FRAME`,
-/// default 512). A look reads 48 KiB of title memory for its slot, and a
-/// whole batch at once cost hundreds of milliseconds a frame; a slot over
-/// the limit is looked at on a later frame instead.
-fn recheck_room() -> bool {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEEN: AtomicU64 = AtomicU64::new(u64::MAX);
-    static USED: AtomicU64 = AtomicU64::new(0);
-    static LIMIT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    let limit = *LIMIT.get_or_init(|| {
-        std::env::var("VICTORY_RECHECK_PER_FRAME")
-            .ok()
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(512)
-    });
-    let frame = crate::frame::current();
-    if SEEN.swap(frame, Ordering::Relaxed) != frame {
-        USED.store(0, Ordering::Relaxed);
-    }
-    USED.fetch_add(1, Ordering::Relaxed) < limit
-}
 
 /// Frames after a whole upload of a texture picked by index at which its
 /// memory is looked at again, each counted from the look before.
@@ -656,24 +695,6 @@ impl State {
     /// on the host list at once, and kept for [`State::replay`].
     pub(crate) fn set_viewports(&mut self, list: &HostList, viewports: &[D3D12_VIEWPORT]) {
         self.viewports.clear();
-        if crate::render_scale::scaled() {
-            // The targets are made smaller (`render_scale`), so the viewport
-            // has to be too, or geometry lands outside them.
-            let scaled: Vec<D3D12_VIEWPORT> = viewports
-                .iter()
-                .map(|v| D3D12_VIEWPORT {
-                    TopLeftX: crate::render_scale::pos(v.TopLeftX),
-                    TopLeftY: crate::render_scale::pos(v.TopLeftY),
-                    Width: crate::render_scale::pos(v.Width),
-                    Height: crate::render_scale::pos(v.Height),
-                    MinDepth: v.MinDepth,
-                    MaxDepth: v.MaxDepth,
-                })
-                .collect();
-            self.viewports.extend_from_slice(&scaled);
-            crate::draw::viewports(list, &scaled);
-            return;
-        }
         self.viewports.extend_from_slice(viewports);
         crate::draw::viewports(list, viewports);
     }
@@ -694,21 +715,6 @@ impl State {
             crate::draw::scissors(list, &vec![full; rects.len()]);
             return;
         }
-        if crate::render_scale::scaled() {
-            let scaled: Vec<RECT> = rects
-                .iter()
-                .map(|r| RECT {
-                    left: crate::render_scale::len(r.left.max(0) as u32) as i32,
-                    top: crate::render_scale::len(r.top.max(0) as u32) as i32,
-                    right: crate::render_scale::len(r.right.max(0) as u32) as i32,
-                    bottom: crate::render_scale::len(r.bottom.max(0) as u32) as i32,
-                })
-                .collect();
-            self.scissors.clear();
-            self.scissors.extend_from_slice(&scaled);
-            crate::draw::scissors(list, &scaled);
-            return;
-        }
         crate::draw::scissors(list, rects);
     }
 
@@ -723,7 +729,7 @@ impl State {
     }
 
     pub(crate) fn set_depth_bounds(&mut self, list: &HostList, min: f32, max: f32) {
-        self.depth_bounds = Some([min, max]);
+        self.bounds = Some((min, max));
         crate::draw::depth_bounds(list, min, max);
     }
 
@@ -763,7 +769,7 @@ impl State {
         if let Some(reference) = self.stencil {
             crate::draw::stencil_ref(list, reference);
         }
-        if let Some([min, max]) = self.depth_bounds {
+        if let Some((min, max)) = self.bounds {
             crate::draw::depth_bounds(list, min, max);
         }
     }
@@ -862,7 +868,8 @@ impl State {
                 _ => {}
             }
         }
-        crate::memory::ready(list, heap, &addresses, &constants, writes)
+        let builder = crate::pipeline::is_builder(self.pipeline as This);
+        crate::memory::ready(list, heap, &addresses, &constants, writes, builder)
     }
 
     /// The bound heap holding `handle`.
@@ -1098,7 +1105,7 @@ impl State {
                     if srv && slot == victory_shader::emit::SLOT_STRIDES {
                         // Ours, not the title's: the shader picks buffers
                         // from the view heap by an index it computes.
-                        match self.heap_buffers(list) {
+                        match self.heap_buffers(list, writes) {
                             // SAFETY: an open list; the table lives as long
                             // as the heap the list holds.
                             Some(gpu) => unsafe {
@@ -1228,11 +1235,12 @@ impl State {
             }
             Some(s)
         };
+        let builder = crate::pipeline::is_builder(self.pipeline as This);
         let ready = |a: u64, s: &std::sync::Arc<crate::shadow::Shadow>| {
             let len = s.left(a).min(limit);
             s.refresh(list, a, len);
             if writes {
-                s.gpu_writes(list, a, len);
+                crate::pipeline::builder_writes(list, s, a, len, builder);
             }
         };
         if !crate::pipeline::host::bounded_root_srvs() {
@@ -1397,11 +1405,73 @@ impl State {
     /// submitted. Tables tell us which views a draw reads; nothing tells
     /// us which of the heap's a computed index names, so all of them are
     /// made ready, once per list.
-    /// shortcut: the buffers are read, not written: what such a shader
-    /// writes through a picked unordered access view stays in the host
-    /// copy. A list refreshes them where it first runs such a shader;
+    /// What such a shader writes through a picked unordered access view
+    /// goes back to title memory only with [`heap_writes`] (see there).
+    /// A list refreshes them where it first runs such a shader;
     /// title writes recorded later in the same list are not seen.
-    fn heap_buffers(&self, list: &HostList) -> Option<u64> {
+    fn heap_buffers(&self, list: &HostList, writes: bool) -> Option<u64> {
+        let gpu = self.heap_buffers_ready(list)?;
+        if writes {
+            self.heap_buffer_writes(list);
+        }
+        Some(gpu)
+    }
+
+    /// A shader that picks buffers by index and can store ran in `list`:
+    /// the unordered access views of the heap (as the last pass found them,
+    /// [`HEAP_UNORDERED`]) are declared written by the list, once per list,
+    /// so that what its shaders stored goes back into title memory after it
+    /// ran ([`heap_writes`]). Without the switch they are only counted and
+    /// logged.
+    fn heap_buffer_writes(&self, list: &HostList) {
+        const ONCE: usize = usize::MAX - 0x5f;
+        if !list.first_use(ONCE) {
+            return;
+        }
+        let Some(heap) = self
+            .heaps
+            .iter()
+            .filter(|&&h| h != 0)
+            .map(|&h| crate::descriptor::heap(h as This))
+            .find(|h| !h.samplers())
+        else {
+            return;
+        };
+        let Some(host) = heap.host() else {
+            return;
+        };
+        let spans = HEAP_UNORDERED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(|m| m.get(&(std::ptr::from_ref(host) as usize)).cloned())
+            .unwrap_or_default();
+        if spans.is_empty() {
+            return;
+        }
+        let bytes: u64 = spans.iter().map(|s| s.2 - s.1).sum();
+        HEAP_WRITE_LISTS.fetch_add(1, Ordering::Relaxed);
+        HEAP_WRITE_BYTES.fetch_add(bytes, Ordering::Relaxed);
+        if !heap_writes() {
+            static ONCE_LOG: std::sync::Once = std::sync::Once::new();
+            ONCE_LOG.call_once(|| {
+                tracing::warn!(
+                    copies = spans.len(),
+                    mb = bytes >> 20,
+                    "a shader that picks buffers by index can store: what it writes through the heap's unordered views \
+                     stays in the host copies and never reaches title memory (VICTORY_HEAP_WRITES=1 copies it back)"
+                );
+            });
+            return;
+        }
+        for (shadow, from, to) in spans {
+            shadow.gpu_writes(list, from, to - from);
+        }
+    }
+
+    /// [`State::heap_buffers`]' pass: the table of strides, with the heap's
+    /// buffer views made ready.
+    fn heap_buffers_ready(&self, list: &HostList) -> Option<u64> {
         let heap = self
             .heaps
             .iter()
@@ -1423,10 +1493,28 @@ impl State {
         // frame over 81,000 views and 4,100 host copies, 18 s of every
         // frame (2026-11-24, run 11).
         // shortcut: what the title writes into such buffers between lists
-        // of one frame is seen a frame late.
+        // of one frame is seen a frame late, unless [`heap_every_list`]
+        // brings the spans the frame's pass found up to date here too.
         static FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
         let frame = crate::frame::current();
         if FRAME.swap(frame, Ordering::Relaxed) == frame {
+            if heap_every_list() {
+                let spans = HEAP_SPANS
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .and_then(|m| m.get(&(std::ptr::from_ref(host) as usize)).cloned())
+                    .unwrap_or_default();
+                for (shadow, from, to) in spans {
+                    // Write-watched or guarded memory only: the rest is
+                    // copied whole by a refresh (the pass does it once a
+                    // frame).
+                    if !shadow.unwatched() {
+                        shadow.refresh(list, from, to - from);
+                        HEAP_LATE_REFRESHES.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
             return Some(gpu);
         }
         let started = std::time::Instant::now();
@@ -1436,7 +1524,7 @@ impl State {
         // at best); all of them every 16 passes, because a view of a
         // released resource goes stale without a write, and a slot written
         // before its memory had a host copy is only made then.
-        type Ranges = std::collections::HashMap<u32, (std::sync::Arc<crate::shadow::Shadow>, u64, u64)>;
+        type Ranges = std::collections::HashMap<u32, (std::sync::Arc<crate::shadow::Shadow>, u64, u64, bool)>;
         static RANGES: std::sync::Mutex<Option<std::collections::HashMap<usize, (u64, Ranges)>>> =
             std::sync::Mutex::new(None);
         let mut kept = RANGES.lock().unwrap_or_else(|e| e.into_inner());
@@ -1488,18 +1576,40 @@ impl State {
             if host.shows(index, &shadow.buffer) == Some(false) {
                 HEAP_VIEWS_ELSEWHERE.fetch_add(1, Ordering::Relaxed);
             }
-            ranges.insert(index, (shadow, address, address + len));
+            let unordered = matches!(view, crate::descriptor::View::Unordered(..) | crate::descriptor::View::Placed(true, ..));
+            ranges.insert(index, (shadow, address, address + len, unordered));
         }
         let views = ranges.len() as u32;
         // Per host copy, the span its picked views cover.
         let mut spans: std::collections::HashMap<usize, (std::sync::Arc<crate::shadow::Shadow>, u64, u64)> =
             std::collections::HashMap::new();
-        for (shadow, from, to) in ranges.values() {
+        // And of those views that are unordered access ones: what a shader
+        // that stores may write ([`State::heap_buffer_writes`]).
+        let mut unordered: std::collections::HashMap<usize, (std::sync::Arc<crate::shadow::Shadow>, u64, u64)> =
+            std::collections::HashMap::new();
+        for (shadow, from, to, uav) in ranges.values() {
             let key = std::sync::Arc::as_ptr(shadow) as usize;
             let span = spans.entry(key).or_insert_with(|| (shadow.clone(), *from, *to));
             span.1 = span.1.min(*from);
             span.2 = span.2.max(*to);
+            if *uav {
+                let span = unordered.entry(key).or_insert_with(|| (shadow.clone(), *from, *to));
+                span.1 = span.1.min(*from);
+                span.2 = span.2.max(*to);
+            }
         }
+        HEAP_SPANS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(Default::default)
+            .insert(std::ptr::from_ref(host) as usize, spans.values().cloned().collect());
+        let uav_views = ranges.values().filter(|r| r.3).count();
+        let uav_bytes: u64 = unordered.values().map(|s| s.2 - s.1).sum();
+        HEAP_UNORDERED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(Default::default)
+            .insert(std::ptr::from_ref(host) as usize, unordered.into_values().collect());
         drop(kept);
         let bytes: u64 = spans.values().map(|s| s.2 - s.1).sum();
         // Memory that is not write-watched is copied whole by every refresh.
@@ -1547,6 +1657,8 @@ impl State {
                 views,
                 copies = spans.len(),
                 mb = bytes >> 20,
+                uav_views,
+                uav_mb = uav_bytes >> 20,
                 ms = started.elapsed().as_millis(),
                 "buffer views of the heap made ready for shaders that pick them by index"
             );
@@ -1823,9 +1935,7 @@ impl State {
             // only a changed texture is uploaded again.
             // `VICTORY_HEAP_RECHECK=0`: uploaded once, as before.
             if let Some((at, len, print, looks, uploaded)) = host.texture_slot_checked(index) {
-                // Over the frame's budget: treated as unchanged, so the slot is
-                // looked at again on its next scheduled frame.
-                if !recheck_room() || crate::texture::fingerprint(at, len) == print {
+                if crate::texture::fingerprint(at, len) == print {
                     HEAP_TEXTURES_RECHECKED[0].fetch_add(1, Ordering::Relaxed);
                     match RECHECK_FRAMES.get(usize::from(looks) + 1) {
                         Some(wait) => {
@@ -2078,15 +2188,6 @@ impl State {
         }
         #[cfg(feature = "diagnostics")]
         list.note_op(|| self.op_text(format!("dispatch {x}x{y}x{z}"), true));
-        crate::recent::note(
-            crate::frame::current(),
-            "dispatch",
-            self.pipeline as u64,
-            x,
-            y,
-            z,
-            0,
-        );
         // SAFETY: an open list with everything set.
         unsafe { list.list.Dispatch(x, y, z) };
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
@@ -2356,15 +2457,6 @@ impl State {
                 Ok(l6) => {
                     #[cfg(feature = "diagnostics")]
                     list.note_op(|| self.op_text(format!("mesh {x}"), false));
-                    crate::recent::note(
-                        crate::frame::current(),
-                        "mesh",
-                        self.pipeline as u64,
-                        x,
-                        1,
-                        1,
-                        0,
-                    );
                     self.mesh_scissor(list, true);
                     // SAFETY: an open list with everything set.
                     unsafe { l6.DispatchMesh(x, 1, 1) };
@@ -2411,7 +2503,7 @@ impl State {
             let draws: u32 = census.1.values().sum();
             if draws > 0 {
                 let mut rects: Vec<([i32; 4], u32)> = census.1.iter().map(|(r, n)| (*r, *n)).collect();
-                rects.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+                rects.sort_unstable_by_key(|r| std::cmp::Reverse(r.1));
                 let scissors: Vec<String> = rects
                     .iter()
                     .take(5)
@@ -2629,7 +2721,8 @@ impl State {
                 let index = first + k;
                 let used = entries.iter().find(|u| u.table_offset_dwords / 8 == k);
                 match crate::descriptor::view(table + u64::from(k) * 32) {
-                    Some(View::Constant(address, size)) => {
+                    Some(View::Constant(address, size)) if address != 0 => {
+                        let size = crate::descriptor::constant_staging_bytes(size);
                         let Some((gpu, to)) = list.scratch(u64::from(size)) else {
                             host.make_null(index);
                             continue;
@@ -2763,15 +2856,6 @@ impl State {
             };
             #[cfg(feature = "diagnostics")]
             list.note_op(|| self.op_text(format!("draw {count}x{instances}"), false));
-            crate::recent::note(
-                crate::frame::current(),
-                "draw",
-                self.pipeline as u64,
-                count,
-                instances,
-                from,
-                first,
-            );
             // SAFETY: an open list with everything set.
             unsafe {
                 list.list
@@ -2829,7 +2913,7 @@ impl State {
                 // The vertices are read in place, at submission: no change
                 // of mapping under the read (see
                 // `crate::watch::title_memory_reading`).
-                let _mapped = crate::watch::title_memory_reading();
+                let _mapped = crate::watch::title_memory_reading(from, n * 3 * stride);
                 // SAFETY: the vertices lie in a title buffer (checked when
                 // recorded) and the scratch memory is the list's.
                 let (src, dst) = unsafe {
@@ -3420,22 +3504,20 @@ pub(crate) fn blend_factor(list: &HostList, factor: Option<&[f32; 4]>) {
     unsafe { list.list.OMSetBlendFactor(factor) };
 }
 
+pub(crate) fn depth_bounds(list: &HostList, min: f32, max: f32) {
+    #[cfg(feature = "diagnostics")]
+    crate::capture::op(std::ptr::from_ref(list) as usize, || format!("DEPTH BOUNDS {min} {max}"));
+    if crate::pipeline::depth_bounds_test()
+        && let Ok(list) = list.list.cast::<ID3D12GraphicsCommandList1>()
+    {
+        // SAFETY: an open list of a host that has the test.
+        unsafe { list.OMSetDepthBounds(min, max) };
+    }
+}
+
 pub(crate) fn stencil_ref(list: &HostList, reference: u32) {
     #[cfg(feature = "diagnostics")]
     crate::capture::op(std::ptr::from_ref(list) as usize, || format!("STENCIL REF {reference:#x}"));
     // SAFETY: an open list.
     unsafe { list.list.OMSetStencilRef(reference) };
-}
-
-pub(crate) fn depth_bounds(list: &HostList, min: f32, max: f32) {
-    #[cfg(feature = "diagnostics")]
-    crate::capture::op(std::ptr::from_ref(list) as usize, || {
-        format!("DEPTH BOUNDS {min}..{max}")
-    });
-    if crate::host::host().is_some_and(|h| h.depth_bounds())
-        && let Ok(l1) = list.list.cast::<ID3D12GraphicsCommandList1>()
-    {
-        // SAFETY: an open list on a device that supports depth bounds.
-        unsafe { l1.OMSetDepthBounds(min, max) };
-    }
 }

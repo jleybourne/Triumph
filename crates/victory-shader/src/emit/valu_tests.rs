@@ -287,6 +287,52 @@ fn f16_to_f32(bits: u16) -> f32 {
     f32::from_bits(f32_bits)
 }
 
+/// MTBUF `op vdata, off, s[srsrc:srsrc+3], 0 format:format` (at byte 0).
+const fn mtbuf(op: u8, vdata: u8, srsrc: u8, format: u8) -> [u32; 2] {
+    [
+        0x3A << 26 | (format as u32 & 0x7F) << 19 | (op as u32 & 7) << 16,
+        0x80 << 24
+            | (op as u32 >> 3 & 1) << 21
+            | (srsrc as u32 >> 2 & 0x1F) << 16
+            | (vdata as u32) << 8,
+    ]
+}
+
+/// Stores `v1` to the buffer, then reads it back into `v0` with the tbuffer
+/// load `op` in buffer format `format`.
+fn tbuffer_load_of_v1(op: u8, format: u8) -> HostShader {
+    let mut body = buffer_store_dword(1, 8, 0).to_vec();
+    body.extend(mtbuf(op, 0, 8, format));
+    build_valu_cs(&body)
+}
+
+#[test]
+fn normalized_buffer_formats_load_their_ends_exactly() {
+    // tbuffer_load_format_x.
+    let x = 0;
+    // (format, dword stored, value loaded)
+    let cases: &[(u8, u32, f32)] = &[
+        (1, 0xFF, 1.0),   // 8_UNORM
+        (7, 0xFFFF, 1.0), // 16_UNORM
+        (2, 0x7F, 1.0),   // 8_SNORM: the top, the one above the lowest, the lowest
+        (2, 0x81, -1.0),
+        (2, 0x80, -1.0),
+        (8, 0x7FFF, 1.0), // 16_SNORM
+        (8, 0x8001, -1.0),
+        (8, 0x8000, -1.0),
+    ];
+    for &(format, stored, want) in cases {
+        let shader = tbuffer_load_of_v1(x, format);
+        run_cases(&shader, &[[stored, 0, 0, 0]], |backend, _, _, got| {
+            assert_eq!(
+                got,
+                want.to_bits(),
+                "{backend}: format {format} of {stored:#x} = {got:#010x}, want {want}",
+            );
+        });
+    }
+}
+
 #[test]
 fn packed_add_selects_halves_of_inline_constants() {
     // Add the inline constant 1/(2*pi) to v1 (zero) to read back its two halves.
@@ -577,6 +623,70 @@ fn v_cmp_lg_is_false_for_nan() {
             );
         });
     }
+}
+
+/// `v_cmp_f_*` is false and `v_cmp_tru_*` true whatever the operands, NaNs
+/// included (RDNA2 ISA). As `fcmp false`/`fcmp true` WARP removed its device
+/// at the first dispatch.
+#[test]
+fn float_compares_that_are_always_false_or_true() {
+    let nan = f32::NAN.to_bits();
+    let f = f32::to_bits;
+    let f32_inputs = [
+        [f(1.0), f(2.0), 0, 0],
+        [f(1.0), f(1.0), 0, 0],
+        [nan, f(1.0), 0, 0],
+        [nan, nan, 0, 0],
+    ];
+    let f16_inputs = [
+        [0x3C00, 0x4000, 0, 0],
+        [0x3C00, 0x3C00, 0, 0],
+        [0x7E00, 0x3C00, 0, 0],
+        [0x7E00, 0x7E00, 0, 0],
+    ];
+    // v_cmp_*_e64 s20, v1, v2; v_cndmask_b32_e64 v0, 0, 1, s20
+    for (op, what, inputs, want) in [
+        (0x000u16, "v_cmp_f_f32", f32_inputs, 0),
+        (0x00f, "v_cmp_tru_f32", f32_inputs, 1),
+        (0x0c8, "v_cmp_f_f16", f16_inputs, 0),
+        (0x0ef, "v_cmp_tru_f16", f16_inputs, 1),
+    ] {
+        let mut body = vop3(op, 20, vgpr(1), vgpr(2), 0x80).to_vec();
+        body.extend_from_slice(&vop3(0x101, 0, 0x80, 0x81, sgpr(20)));
+        let shader = build_valu_cs(&body);
+        run_cases(&shader, &inputs, |backend, _, inp, got| {
+            assert_eq!(
+                got, want,
+                "{backend}: {what}({:#010x}, {:#010x}) = {got}, want {want}",
+                inp[0], inp[1],
+            );
+        });
+    }
+}
+
+#[test]
+fn v_cvt_off_f32_i4_uses_the_signed_low_nibble() {
+    // v_cvt_off_f32_i4 v0, v1 (VOP1 opcode 0x00e)
+    let shader = build_valu_cs(&[vop1(0x00e, 0, vgpr(1))]);
+    let nibble = |n: u32| (((n as i32) << 28) >> 28) as f32 / 16.0;
+
+    let mut cases: Vec<u32> = (0..16).collect();
+    // Bits above the low nibble are ignored.
+    cases.extend([0xABCD_EF05, 0xFFFF_FFF8, 0x1234_5670, 0x8000_000F, 0x0000_00F7]);
+    let inputs: Vec<[u32; 4]> = cases.iter().map(|&x| [x, 0, 0, 0]).collect();
+    run_cases(&shader, &inputs, |backend, i, inp, got| {
+        let want = nibble(cases[i]).to_bits();
+        assert_eq!(
+            got, want,
+            "{backend}: v_cvt_off_f32_i4({:#010x}) = {got:#010x} ({:?}), want {want:#010x}",
+            inp[0],
+            f32::from_bits(got),
+        );
+    });
+    // Spot-check the reference itself: 0x5 -> 0.3125, 0x8 -> -0.5, 0xF -> -0.0625.
+    assert_eq!(nibble(0xABCD_EF05), 0.3125);
+    assert_eq!(nibble(8), -0.5);
+    assert_eq!(nibble(0xF), -0.0625);
 }
 
 #[test]
@@ -944,6 +1054,38 @@ fn v_sin_and_v_cos_f16_reduce_large_turns() {
             ),
         }
     });
+}
+
+/// A 32-bit literal in a signed 64-bit operand is sign-extended (an
+/// unsigned one's is zero-extended): -100 compared with `v[1:2]`, and
+/// shifted by `s_ashr_i64`.
+#[test]
+fn signed_64_bit_operands_sign_extend_their_literal() {
+    const MINUS_100: u32 = -100_i32 as u32;
+    let check = |name: &str, body: &[u32], cases: &[([u32; 4], u32)]| {
+        let shader = build_valu_cs(body);
+        let inputs: Vec<[u32; 4]> = cases.iter().map(|c| c.0).collect();
+        run_cases(&shader, &inputs, |backend, i, inp, got| {
+            let want = cases[i].1;
+            assert_eq!(got, want, "{backend}: {name} {inp:x?}");
+        });
+    };
+    // v_cmp_*_i64 s6, v[1:2], -100 (VOP3, literal src1), then
+    // v_cndmask_b32 v0, 0, 1, s6.
+    let compare = |op: u16| {
+        let [a, b] = vop3(op, 6, vgpr(1), 255, 0);
+        let [c, d] = vop3(0x101, 0, 0x80, 0x81, sgpr(6));
+        [a, b, MINUS_100, c, d]
+    };
+    // An i64 as the two input dwords of `v[1:2]`.
+    let pair = |n: i64| [n as u32, (n >> 32) as u32, 0, 0];
+    let eq = [(pair(-100), 1), ([MINUS_100, 0, 0, 0], 0), (pair(0), 0)];
+    check("v_cmp_eq_i64", &compare(0x0A2), &eq);
+    let lt = [(pair(-200), 1), (pair(-50), 0), (pair(0), 0)];
+    check("v_cmp_lt_i64", &compare(0x0A1), &lt);
+    // s_ashr_i64 s[6:7], -100, 4; v_mov_b32 v0, s7: the high dword.
+    let ashr = [sop2(0x23, 6, 255, 0x84), MINUS_100, vop1(0x001, 0, sgpr(7))];
+    check("s_ashr_i64", &ashr, &[([0; 4], u32::MAX)]);
 }
 
 #[test]
@@ -1621,4 +1763,216 @@ fn whole_wave_f64_sum_and_cvt_f32_f64() {
             );
         }
     }
+}
+
+#[test]
+fn glc_heap_uav_loads_stores_and_atomics_execute_on_gpu() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    // Compute shader with `RootType::ResourceHeap` (`s2`) and 2 root constants
+    // (`s0..s1`), 2 threads per group (`v0` = thread id in group), dispatched
+    // across 2 groups (`s3` = group id X):
+    // - Heap index 0 (`0x0`): raw UAV buffer (16 dwords)
+    // - Heap index 1 (`0x20`): 2x2 RGBA32F texture UAV
+    // - Heap index 2 (`0x40`): 2x1 R32_UINT texture UAV
+    // Exercises heap UAV inference (#724) and `IsGloballyCoherent` `0x4000`
+    // (#725) across `buffer_store_dword glc`, `s_barrier`, reloaded descriptor
+    // `s_buffer_load_dword glc`, `buffer_load_dword` (plain and `glc`),
+    // `buffer_atomic_add glc`, `image_store glc`, `image_load glc`, and
+    // `image_atomic_add glc`.
+    let lshl_add = vop3(0x346, 1, sgpr(3), 0x81, vgpr(0)); // v_lshl_add_u32 v1, s3, 1, v0
+    let lshl_byte = vop3(0x11A, 2, 0x82, vgpr(1), 0); // v_lshlrev_b32 v2, 2, v1
+    let add_s0_v1 = vop3(0x125, 3, sgpr(0), vgpr(1), 0); // v_add_nc_u32 v3, s0, v1
+    let add_v4_v5 = vop3(0x125, 4, vgpr(4), vgpr(5), 0); // v_add_nc_u32 v4, v4, v5
+    let add_s6_v4 = vop3(0x125, 4, sgpr(6), vgpr(4), 0); // v_add_nc_u32 v4, s6, v4
+    let words = [
+        s_mov_b32(4, 2), // s4 = resource heap base (s2)
+        s_mov_b32(5, 0x80),
+        0xF408_0202,
+        0xFA00_0000, // s_load_dwordx4 s[8:11], s[4:5], 0x0   (raw UAV @ 0)
+        0xF40C_0302,
+        0xFA00_0020, // s_load_dwordx8 s[12:19], s[4:5], 0x20 (RGBA32F UAV @ 1)
+        0xF40C_0502,
+        0xFA00_0040, // s_load_dwordx8 s[20:27], s[4:5], 0x40 (R32_UINT UAV @ 2)
+        // v1 = flat index = group_id_x * 2 + thread_id_x; v2 = v1 * 4 (byte offset).
+        lshl_add[0],
+        lshl_add[1],
+        lshl_byte[0],
+        lshl_byte[1],
+        // v3 = s0 + v1; store with `glc` at byte offset v2.
+        add_s0_v1[0],
+        add_s0_v1[1],
+        0xE070_5000,
+        0x8002_0302, // buffer_store_dword v3, v2, s[8:11], 0 offen glc
+        0xBF8A_0000, // s_barrier
+        // Reload raw UAV @ 0 into s[28:31], read dword 0 via scalar `glc` and
+        // lane's own slot via vector `glc` + plain load, and write sum to slot 4 + flat.
+        0xF408_0702,
+        0xFA00_0000, // s_load_dwordx4 s[28:31], s[4:5], 0x0
+        0xF421_018E,
+        0xFA00_0000, // s_buffer_load_dword s6, s[28:31], 0x0 glc
+        0xE030_5000,
+        0x8007_0402, // buffer_load_dword v4, v2, s[28:31], 0 offen glc
+        0xE030_1000,
+        0x8007_0502, // buffer_load_dword v5, v2, s[28:31], 0 offen
+        add_v4_v5[0],
+        add_v4_v5[1],
+        add_s6_v4[0],
+        add_s6_v4[1],
+        0xE070_5010,
+        0x8007_0402, // buffer_store_dword v4, v2, s[28:31], 0 offen offset:16 glc
+        // Atomic add s1 into dword 8 of raw UAV with `glc`.
+        vop1(0x001, 6, sgpr(1)), // v_mov_b32 v6, s1
+        vop1(0x001, 7, 0x80),    // v_mov_b32 v7, 0
+        0xE0C8_5020,
+        0x8007_0607, // buffer_atomic_add v6, v7, s[28:31], 0 offen offset:32 glc
+        // Texture UAV (2x2): store (1.0, 2.0, 3.0, 4.0) at (v0, s3) with `glc`,
+        // load back with `glc`, and atomic_add 5 at (s3, 0) on R32U texture UAV.
+        vop1(0x001, 8, vgpr(0)), // x = thread_id_x (0..1)
+        vop1(0x001, 9, sgpr(3)), // y = group_id_x (0..1)
+        vop1(0x001, 10, 0xF2),   // 1.0f
+        vop1(0x001, 11, 0xF4),   // 2.0f
+        vop1(0x001, 12, 0xF6),   // 4.0f
+        vop1(0x001, 13, 0xF0),   // 0.5f
+        0xF020_2F08,
+        0x0003_0A08, // image_store v[10:13], v[8:9], s[12:19] dmask:0xf 2d glc
+        0xBF8A_0000, // s_barrier
+        0xF000_2F08,
+        0x0003_0E08, // image_load v[14:17], v[8:9], s[12:19] dmask:0xf 2d glc
+        0xE070_5024,
+        0x8007_0E02, // buffer_store_dword v14, v2, s[28:31], 0 offen offset:36 glc
+        vop1(0x001, 18, sgpr(3)), // x = group_id_x
+        vop1(0x001, 19, 0x80), // y = 0
+        vop1(0x001, 20, 0x85), // 5
+        0xF044_2108,
+        0x0005_1412, // image_atomic_add v20, v[18:19], s[20:27] dmask:0x1 2d glc
+        S_ENDPGM,
+    ];
+    let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let native = NativeProgram {
+        stage: HwStage::Cs,
+        wave64: false,
+        vgprs: 24,
+        layout: vec![
+            RootParam {
+                root: RootType::Constants,
+                table_offset_dwords: 0,
+                sgprs: 2,
+                base_register: 0,
+                user_data: 0,
+                slot: 0,
+            },
+            RootParam {
+                root: RootType::ResourceHeap,
+                table_offset_dwords: 0,
+                sgprs: 1,
+                base_register: 0,
+                user_data: 2,
+                slot: 1,
+            },
+        ],
+        used: Vec::new(),
+        io: StageIo::Cs(ComputeIo {
+            // 3 user SGPRs (s0..s2) + TGID_X enabled (bit 7 -> s3).
+            rsrc2: (3 << 1) | (1 << 7),
+            threads: [2, 1, 1],
+        }),
+        code,
+    };
+
+    let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+    let st = structure::structure(&p).expect("structure");
+    let res =
+        resource::track(&p, &native.layout, native.stage, Some(&st)).expect("resource::track");
+    let io = io::raise(&p, &native).expect("io::raise");
+    let lowered = lower::lower(&lower::Parts {
+        native: &native,
+        p: &p,
+        st: &st,
+        io: &io,
+        res: &res,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        prims: Vec::new(),
+        mesh_stride: 0,
+    })
+    .expect("lower");
+
+    let mut v = validator::Validator::load(validator::Validator::default_path().as_deref())
+        .expect("dxil.dll validator must load");
+    let mut copy = lowered.dxil.clone();
+    let ours = copy[4..20].to_vec();
+    v.validate(&mut copy).expect("DXIL validation failed");
+    assert_eq!(copy[4..20], ours[..], "container hash mismatch");
+
+    let shader = HostShader {
+        stage: HwStage::Cs,
+        dxil: lowered.dxil,
+        user_data: lowered.user_data,
+        samplers: lowered.samplers,
+        static_samplers: Vec::new(),
+        root_cbvs: lowered.root_cbvs,
+        root_srvs: lowered.root_srvs,
+        root_uavs: lowered.root_uavs,
+        root_indexed_views: res.root_indexed_views,
+    };
+
+    let mut ran = 0;
+    for (label, warp) in [("hardware", false), ("warp", true)] {
+        let Ok(host) = Host::new(warp) else {
+            eprintln!("no SM 6.6 {label} device; skipped");
+            continue;
+        };
+        let (root, pso) = host
+            .compute_pipeline(&shader)
+            .unwrap_or_else(|e| panic!("{label}: compute_pipeline failed: {e}"));
+        let inputs = [100u32, 7u32];
+        let mut ud = vec![0u32; shader.user_data_dwords().max(1) as usize];
+        for u in &shader.user_data {
+            ud[u.index as usize] = inputs[u.dword as usize];
+        }
+        let out = host
+            .dispatch(
+                &root,
+                &pso,
+                &Dispatch {
+                    roots: vec![(0, Root::Constants(ud))],
+                    views: &[
+                        View::RawUav(16),
+                        View::TextureUav(2, 2),
+                        View::UintTextureUav(2, 1),
+                    ],
+                    samplers: &[],
+                    groups: [2, 1, 1],
+                },
+            )
+            .unwrap_or_else(|e| panic!("{label}: dispatch failed: {e}"));
+        // Slots 0..4 hold 100..103.
+        assert_eq!(&out[0][0..4], &[100, 101, 102, 103], "{label}: raw stores");
+        // Group 0 saw its own s_barrier before reading dword 0 (100):
+        // slot 4 = 100 + 100 + 100 = 300, slot 5 = 101 + 101 + 100 = 302.
+        assert_eq!(&out[0][4..6], &[300, 302], "{label}: reloaded glc reads");
+        // Slot 8 accumulated 4 atomic adds of 7 = 28.
+        assert_eq!(out[0][8], 28, "{label}: buffer_atomic_add glc");
+        // Slots 9..13 hold 1.0f read back through `image_load glc`.
+        assert_eq!(
+            &out[0][9..13],
+            &[1.0f32.to_bits(); 4],
+            "{label}: image_load glc readback"
+        );
+        // 2x2 RGBA32F texture UAV holds (1.0, 2.0, 4.0, 0.5) at all 4 texels.
+        for px in out[1].as_chunks::<4>().0 {
+            assert_eq!(
+                *px,
+                [1.0f32, 2.0, 4.0, 0.5].map(f32::to_bits),
+                "{label}: texture store glc"
+            );
+        }
+        // 2x1 R32_UINT texture UAV: 2 threads per group * 5 = 10 at (0,0) and (1,0).
+        assert_eq!(&out[2][0..2], &[10, 10], "{label}: image_atomic_add glc");
+        ran += 1;
+    }
+    assert!(
+        ran == 2,
+        "expected both hardware GPU and WARP to run, got {ran}"
+    );
 }

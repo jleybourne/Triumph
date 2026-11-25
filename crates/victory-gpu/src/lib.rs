@@ -22,6 +22,8 @@ pub mod console;
 mod copystat;
 pub mod descriptor;
 pub mod device;
+#[cfg(all(windows, feature = "diagnostics"))]
+pub mod diagstream;
 #[cfg(windows)]
 mod draw;
 pub mod dxgi;

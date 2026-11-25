@@ -534,6 +534,7 @@ pub fn stub_vs(ps: &HostShader) -> Result<HostShader, String> {
             cols: 4,
             usage: 0,
             half: false,
+            packed: false,
         });
     }
     Ok(stub(false, outputs))
@@ -552,6 +553,7 @@ pub fn stub_ps() -> HostShader {
         cols: 4,
         usage: 0,
         half: false,
+        packed: false,
     };
     stub(true, vec![target])
 }

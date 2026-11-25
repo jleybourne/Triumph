@@ -168,29 +168,47 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
             ];
             let end = regs[end_reg as usize & 15] as usize;
             let start = ctx.Rax as usize;
-            if end > start && end - start < 2 << 30 {
-                // Region by region: a block may lie across several (the title's pages are
-                // mapped one view each), and one answer for all of it was a refusal, after
-                // which every 64-byte line took an exception of its own.
-                let mut at = start;
-                while at < end {
-                    let Some(to) = writable_to(at, end) else { break };
-                    // SAFETY: committed and writable from `at` to `to`.
-                    unsafe { std::ptr::write_bytes(at as *mut u8, 0, to - at) };
-                    at = to;
-                }
-                if at == start {
+            // Fast-path only when `[start, end)` is a non-empty, 64-byte-aligned
+            // run. Otherwise emulate just the single `clzero` instruction and let
+            // the CPU run `add rax, 0x40; cmp rax, end; jb` natively so unaligned
+            // cache-line rounding, `end <= start` (do-while executes once), and
+            // final `RAX` / `EFlags` stay exact.
+            if start & 63 != 0 || end <= start || (end - start) & 63 != 0 {
+                let line = start & !63;
+                if !writable(line, 64) {
                     return 0;
                 }
-                ZEROED.fetch_add((at - start) as u64, Relaxed);
-                if at < end {
-                    // What follows is not writable: the loop goes on there (the same
-                    // instruction again), where the real one faults too.
-                    ctx.Rax = at as u64;
-                    return CONTINUE_EXECUTION;
-                }
+                // SAFETY: the 64-byte line is committed and writable.
+                unsafe { std::ptr::write_bytes(line as *mut u8, 0, 64) };
+                ctx.Rip += (len - 9) as u64;
+                EMULATED.fetch_add(1, Relaxed);
+                return CONTINUE_EXECUTION;
+            }
+            // Region by region: a block may lie across several (the title's pages are
+            // mapped one view each), and one answer for all of it was a refusal, after
+            // which every 64-byte line took an exception of its own.
+            let mut at = start;
+            while at < end {
+                let Some(to) = writable_to(at, end) else { break };
+                // SAFETY: committed and writable from `at` to `to`.
+                unsafe { std::ptr::write_bytes(at as *mut u8, 0, to - at) };
+                at = to;
+            }
+            if at == start {
+                return 0;
+            }
+            ZEROED.fetch_add((at - start) as u64, Relaxed);
+            if at < end {
+                // What follows is not writable: the loop goes on there (the same
+                // instruction again), where the real one faults too.
+                ctx.Rax = at as u64;
+                return CONTINUE_EXECUTION;
             }
             ctx.Rax = end as u64;
+            // Set EFlags as `cmp rax, end` does when `rax == end`: ZF=1, PF=1,
+            // CF=0, AF=0, SF=0, OF=0.
+            const CMP_FLAGS: u32 = (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 11);
+            ctx.EFlags = (ctx.EFlags & !CMP_FLAGS) | (1 << 2) | (1 << 6);
         }
         ConsoleOnly::Rdpru => {
             let mut v = 0i64;
@@ -246,4 +264,78 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
         );
     }
     CONTINUE_EXECUTION
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[repr(align(64))]
+    struct AlignedBuf([u8; 256]);
+
+    #[test]
+    fn clzero_loop_handles_aligned_unaligned_empty_and_eflags() {
+        // clzero; add rax, 0x40; cmp rax, rcx (48 39 C8); jb -12
+        let loop_code: [u8; 16] = [
+            0x0F, 0x01, 0xFC, 0x48, 0x83, 0xC0, 0x40, 0x48, 0x39, 0xC8, 0x72, 0xF4, 0x90, 0x90,
+            0x90, 0x90,
+        ];
+        let rip = loop_code.as_ptr() as u64;
+
+        // 1. Aligned 128-byte run: zeroes full range, updates RAX and EFlags (ZF=1, PF=1, CF=0).
+        let mut buf = AlignedBuf([0xAA; 256]);
+        let start = buf.0.as_mut_ptr() as u64;
+        // SAFETY: zero-initialized CONTEXT for synthetic emulation test.
+        let mut ctx: CONTEXT = unsafe { std::mem::zeroed() };
+        ctx.Rip = rip;
+        ctx.Rax = start;
+        ctx.Rcx = start + 128;
+        ctx.EFlags = 1 << 0; // stale CF=1, ZF=0
+        // SAFETY: `ctx` points to valid `loop_code` and `buf`.
+        assert_eq!(unsafe { emulate(&mut ctx) }, CONTINUE_EXECUTION);
+        assert_eq!(ctx.Rip, rip + 12);
+        assert_eq!(ctx.Rax, start + 128);
+        assert_eq!(ctx.EFlags & ((1 << 0) | (1 << 2) | (1 << 6)), (1 << 2) | (1 << 6));
+        assert!(buf.0[..128].iter().all(|&b| b == 0));
+        assert!(buf.0[128..].iter().all(|&b| b == 0xAA));
+
+        // 2. end == start (do-while must execute one `clzero` and step RIP by 3, not skip).
+        let mut buf = AlignedBuf([0xBB; 256]);
+        let start = buf.0.as_mut_ptr() as u64;
+        ctx.Rip = rip;
+        ctx.Rax = start;
+        ctx.Rcx = start;
+        // SAFETY: `ctx` points to valid `loop_code` and `buf`.
+        assert_eq!(unsafe { emulate(&mut ctx) }, CONTINUE_EXECUTION);
+        assert_eq!(ctx.Rip, rip + 3);
+        assert_eq!(ctx.Rax, start);
+        assert!(buf.0[..64].iter().all(|&b| b == 0));
+        assert!(buf.0[64..].iter().all(|&b| b == 0xBB));
+
+        // 3. Unaligned end (16 bytes): zeroes full 64-byte cache line and steps RIP by 3.
+        let mut buf = AlignedBuf([0xCC; 256]);
+        let start = buf.0.as_mut_ptr() as u64;
+        ctx.Rip = rip;
+        ctx.Rax = start;
+        ctx.Rcx = start + 16;
+        // SAFETY: `ctx` points to valid `loop_code` and `buf`.
+        assert_eq!(unsafe { emulate(&mut ctx) }, CONTINUE_EXECUTION);
+        assert_eq!(ctx.Rip, rip + 3);
+        assert_eq!(ctx.Rax, start);
+        assert!(buf.0[..64].iter().all(|&b| b == 0));
+        assert!(buf.0[64..].iter().all(|&b| b == 0xCC));
+
+        // 4. Unaligned start (+12): zeroes [start & !63 .. +64) and steps RIP by 3.
+        let mut buf = AlignedBuf([0xDD; 256]);
+        let base = buf.0.as_mut_ptr() as u64;
+        ctx.Rip = rip;
+        ctx.Rax = base + 12;
+        ctx.Rcx = base + 128;
+        // SAFETY: `ctx` points to valid `loop_code` and `buf`.
+        assert_eq!(unsafe { emulate(&mut ctx) }, CONTINUE_EXECUTION);
+        assert_eq!(ctx.Rip, rip + 3);
+        assert_eq!(ctx.Rax, base + 12);
+        assert!(buf.0[..64].iter().all(|&b| b == 0));
+        assert!(buf.0[64..].iter().all(|&b| b == 0xDD));
+    }
 }

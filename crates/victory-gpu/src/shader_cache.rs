@@ -112,6 +112,24 @@ pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
     }
 }
 
+/// [`host_shader`] for a pipeline whose mesh and pixel shaders are
+/// translated together with `link`: an entry of its own, keyed by the
+/// link too.
+pub(crate) fn host_shader_linked(
+    container: &[u8],
+    link: &victory_shader::emit::Link,
+) -> Result<HostShader, String> {
+    let translate =
+        |c: &[u8]| victory_shader::emit::translate_linked(c, link).map_err(|e| e.to_string());
+    match CACHE.get() {
+        Some(cache) => {
+            let key = *blake3::hash(&[&build()[..], b"link", &link.key()].concat()).as_bytes();
+            cached(cache, &key, container, translate)
+        }
+        None => translate(container),
+    }
+}
+
 /// The cache entry's converter: the build and the container in, the
 /// encoded translation out. `ran` tells a miss from a hit.
 struct Translate<F> {

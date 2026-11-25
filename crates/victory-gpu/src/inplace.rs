@@ -98,11 +98,68 @@ fn most() -> u64 {
     *MOST.get_or_init(|| std::env::var("VICTORY_INPLACE_MB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(4096) << 20)
 }
 
+/// The 64 KiB pages that hold title memory `[start, start + len)`: the base
+/// of the first and the bytes from it, or `None` when the span cannot be
+/// rounded up without leaving the address space.
+///
+/// `len == 0` still asks for one byte, as the console's `[start, start)`
+/// spans did: one page.
+fn aligned_span(start: u64, len: u64) -> Option<(u64, u64)> {
+    let at = start & !(K64 as u64 - 1);
+    let end = start.checked_add(len.max(1))?;
+    Some((at, end.checked_next_multiple_of(K64 as u64)? - at))
+}
+
+/// Title memory promised to a placement in flight, in bytes: what
+/// [`place_for`] reserves before asking the host and [`gone`] gives back.
+/// One counter and not the sum of [`STATS`], because two counters cannot be
+/// read and claimed in one step. It stands above `STATS[1] + STATS[3]` only
+/// while a placement is in flight, between its reservation and its counters.
+static RESERVED: AtomicU64 = AtomicU64::new(0);
+
+/// Reserves `bytes` of the budget [`most`] sets in one step: the check and
+/// the claim are the same operation, so two threads cannot each see room for
+/// their own placement. False when the reservation would pass `limit`.
+fn try_reserve_at(count: &AtomicU64, bytes: u64, limit: u64) -> bool {
+    let mut reserved = count.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = reserved.checked_add(bytes) else {
+            return false;
+        };
+        if next > limit {
+            return false;
+        }
+        match count.compare_exchange_weak(reserved, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return true,
+            Err(actual) => reserved = actual,
+        }
+    }
+}
+
+/// [`try_reserve_at`] on the process's budget.
+fn try_reserve(bytes: u64, limit: u64) -> bool {
+    try_reserve_at(&RESERVED, bytes, limit)
+}
+
+/// Gives back what [`try_reserve_at`] took. Releasing more than was ever
+/// reserved would wrap the counter and turn the budget off for the rest of
+/// the run, so it trips here instead.
+fn release_at(count: &AtomicU64, bytes: u64) {
+    let before = count.fetch_sub(bytes, Ordering::Relaxed);
+    debug_assert!(before >= bytes, "released {bytes} of {before} reserved");
+}
+
+/// [`release_at`] on the process's budget.
+fn release(bytes: u64) {
+    release_at(&RESERVED, bytes);
+}
+
 /// In place now: windows and their bytes, title buffers and their bytes;
 /// then, since the start: asks turned down because the memory is a view
 /// or not private memory committed whole, because the host refused,
-/// because of [`most`]; and what was let go because its memory changed.
-static STATS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+/// because of [`most`]; what was let go because its memory changed; and
+/// title buffers copied instead because late waits are on.
+static STATS: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
 
 /// A buffer placed over title memory, and its heap.
 pub(crate) struct Placed {
@@ -119,8 +176,12 @@ pub(crate) struct Placed {
 /// with nothing if the memory is not private memory committed whole
 /// (nothing was asked of the host), with the host's error if it refused.
 pub(crate) fn place_part(device: &ID3D12Device, start: u64, len: u64) -> Result<Placed, Option<windows::core::Error>> {
-    let at = start & !(K64 as u64 - 1);
-    let bytes = (start + len.max(1)).next_multiple_of(K64 as u64) - at;
+    // A span whose end leaves the address space is not memory the title can
+    // hold: nothing is asked of the host (adding wrapped, and the rounding
+    // after it panicked, before this).
+    let Some((at, bytes)) = aligned_span(start, len) else {
+        return Err(None);
+    };
     if !private_whole(at as usize, bytes as usize) {
         return Err(None);
     }
@@ -131,11 +192,42 @@ pub(crate) fn place_part(device: &ID3D12Device, start: u64, len: u64) -> Result<
     Ok(Placed { buffer, heap, gpu, bias: start - at })
 }
 
+/// What [`place_for`] asks of the runtime's switches, gathered so a test can
+/// set them: [`level`] and [`crate::host::late`] are each read once per
+/// process, from the environment, and a test cannot change that.
+#[derive(Clone, Copy)]
+struct Switches {
+    level: u8,
+    late: bool,
+}
+
+impl Switches {
+    fn process() -> Switches {
+        Switches {
+            level: level(),
+            late: crate::host::late(),
+        }
+    }
+
+    /// Whether title memory this is a window outside buffers (`true`) or a
+    /// title buffer, under late waits. The rule on its own, so both its
+    /// directions can be read in one place and asserted.
+    fn refuses_late_wait(self, window: bool) -> bool {
+        !window && self.late
+    }
+}
+
 /// Title memory `[start, start + len)` in place, for a window outside
 /// buffers or a title buffer, if [`level`] asks for it and the memory can
 /// be opened; `None` leaves the caller to make a copy, as before.
 pub(crate) fn place_for(start: u64, len: u64, window: bool) -> Option<Placed> {
-    if level() < if window { 1 } else { 2 } {
+    place_for_with(Switches::process(), start, len, window)
+}
+
+/// [`place_for`] with the switches given, so tests reach the refusals that
+/// the environment normally decides.
+fn place_for_with(switches: Switches, start: u64, len: u64, window: bool) -> Option<Placed> {
+    if switches.level < if window { 1 } else { 2 } {
         return None;
     }
     // View memory: known from the runtime without asking Windows.
@@ -143,23 +235,49 @@ pub(crate) fn place_for(start: u64, len: u64, window: bool) -> Option<Placed> {
         STATS[4].fetch_add(1, Ordering::Relaxed);
         return None;
     }
-    if STATS[1].load(Ordering::Relaxed) + STATS[3].load(Ordering::Relaxed) + len > most() {
+    // Stage 2's assumption, enforced instead of only written down (`level`):
+    // nothing reads title memory that a submission not yet run writes
+    // through a placed buffer. With every submission waited for that holds;
+    // with late waits -- `VICTORY_LATE_WAIT`, and the relay, which
+    // `late_stage` counts as stage 3 -- the flights know shader writes only
+    // by the ranges copies declare, so a title buffer in place would be read
+    // older than the GPU left it. A copy is the correct path, and the only
+    // cost. A window outside buffers is safe either way: it *is* a copy, so
+    // the flights know its writes.
+    if switches.refuses_late_wait(window) {
+        if STATS[8].fetch_add(1, Ordering::Relaxed) == 0 {
+            tracing::warn!(
+                "VICTORY_INPLACE=2 cannot run with VICTORY_LATE_WAIT or VICTORY_RELAY: a submission not yet run writes through a placed buffer that the flights do not track. Title buffers are copied instead; windows outside buffers stay in place."
+            );
+        }
+        return None;
+    }
+    // The 64 KiB pages that hold it are what the host locks, so those are the
+    // bytes the budget counts -- not the title's length, which is up to one
+    // page shorter.
+    let (_, locked) = aligned_span(start, len)?;
+    if !try_reserve(locked, most()) {
         STATS[6].fetch_add(1, Ordering::Relaxed);
         return None;
     }
-    let host = crate::host::host()?;
+    let Some(host) = crate::host::host() else {
+        release(locked);
+        return None;
+    };
     match place_part(&host.device, start, len) {
         Ok(placed) => {
             let at = if window { 0 } else { 2 };
             STATS[at].fetch_add(1, Ordering::Relaxed);
-            STATS[at + 1].fetch_add(len, Ordering::Relaxed);
+            STATS[at + 1].fetch_add(locked, Ordering::Relaxed);
             Some(placed)
         }
         Err(None) => {
+            release(locked);
             STATS[4].fetch_add(1, Ordering::Relaxed);
             None
         }
         Err(Some(e)) => {
+            release(locked);
             if STATS[5].fetch_add(1, Ordering::Relaxed) < 8 {
                 tracing::warn!(start = format_args!("{start:#x}"), len, error = %e, "title memory not opened in place: a copy instead");
             }
@@ -168,11 +286,18 @@ pub(crate) fn place_for(start: u64, len: u64, window: bool) -> Option<Placed> {
     }
 }
 
-/// What [`place_for`] gave is gone.
-pub(crate) fn gone(window: bool, bytes: u64) {
+/// What [`place_for`] gave is gone: `start` and `len` are the ones it was
+/// placed with, so the same pages are given back to the budget.
+pub(crate) fn gone(window: bool, start: u64, len: u64) {
+    // Placed memory always had a span that could be rounded up; one that
+    // could not was never reserved, and counted nothing.
+    let Some((_, locked)) = aligned_span(start, len) else {
+        return;
+    };
     let at = if window { 0 } else { 2 };
     STATS[at].fetch_sub(1, Ordering::Relaxed);
-    STATS[at + 1].fetch_sub(bytes, Ordering::Relaxed);
+    STATS[at + 1].fetch_sub(locked, Ordering::Relaxed);
+    release(locked);
 }
 
 /// Title memory `[at, at + len)` is about to show something else, or the
@@ -200,7 +325,7 @@ fn say() {
     let s: Vec<u64> = STATS.iter().map(|s| s.load(Ordering::Relaxed)).collect();
     tracing::info!(
         "title memory in place: {} windows {} MB, {} title buffers {} MB (no copy, no refresh, no copy-back); turned down: {} view memory or not private memory committed whole, \
-         {} refused by the host, {} over VICTORY_INPLACE_MB; {} let go because their memory changed",
+         {} refused by the host, {} over VICTORY_INPLACE_MB; {} let go because their memory changed; {} title buffers copied because late waits are on (VICTORY_INPLACE=2 cannot run with them)",
         s[0],
         s[1] >> 20,
         s[2],
@@ -208,7 +333,8 @@ fn say() {
         s[4],
         s[5],
         s[6],
-        s[7]
+        s[7],
+        s[8]
     );
 }
 
@@ -267,11 +393,17 @@ pub(crate) fn place(device: &ID3D12Device, heap: &ID3D12Heap, offset: u64, size:
 struct Views {
     /// By address: bytes, the section's handle, the offset in it.
     views: BTreeMap<usize, (usize, usize, u64)>,
+    /// By section and byte offset of a 64 KiB page: the address of that
+    /// page in every view that shows it. A write through one view of a
+    /// page is a write of the bytes every other view shows
+    /// (`crate::watch` guards them all).
+    pages: BTreeMap<(usize, u64), Vec<usize>>,
     /// Sections by handle: bytes, and whether made committed.
     sections: Vec<(usize, u64, bool)>,
 }
 
-static VIEWS: Mutex<Views> = Mutex::new(Views { views: BTreeMap::new(), sections: Vec::new() });
+static VIEWS: Mutex<Views> =
+    Mutex::new(Views { views: BTreeMap::new(), pages: BTreeMap::new(), sections: Vec::new() });
 
 fn views() -> std::sync::MutexGuard<'static, Views> {
     VIEWS.lock().unwrap_or_else(|e| e.into_inner())
@@ -288,7 +420,17 @@ pub fn title_memory_section(section: usize, bytes: u64, committed: bool) {
 /// The runtime mapped `[at, at + len)` as a view of `section` from
 /// `offset` on. Call after [`crate::title_memory_remapped`] of the range.
 pub fn title_memory_view(at: usize, len: usize, section: usize, offset: u64) {
-    views().views.insert(at, (len, section, offset));
+    {
+        let mut v = views();
+        v.views.insert(at, (len, section, offset));
+        for k in 0..len.div_ceil(K64) {
+            v.pages.entry((section, offset + (k * K64) as u64)).or_default().push(at + k * K64);
+        }
+    }
+    // This view is writable from now on: a guard over the same bytes at
+    // another view must look at them again, and the pages are noted written
+    // there (`crate::watch`).
+    crate::watch::views_mapped(section, offset, len);
 }
 
 /// What `[at, at + len)` showed is gone ([`crate::title_memory_remapped`]):
@@ -303,8 +445,86 @@ pub(crate) fn views_gone(at: usize, len: usize) {
     let first = v.views.range(..=at).next_back().filter(|(base, view)| *base + view.0 > at).map(|(base, _)| *base);
     let gone: Vec<usize> = first.into_iter().chain(v.views.range(at.saturating_add(1)..end).map(|(base, _)| *base)).collect();
     for base in gone {
-        v.views.remove(&base);
+        let Some((bytes, section, offset)) = v.views.remove(&base) else {
+            continue;
+        };
+        for k in 0..bytes.div_ceil(K64) {
+            let key = (section, offset + (k * K64) as u64);
+            if let Some(pages) = v.pages.get_mut(&key) {
+                let page = base + k * K64;
+                pages.retain(|&shown| shown != page);
+                if pages.is_empty() {
+                    v.pages.remove(&key);
+                }
+            }
+        }
     }
+}
+
+/// The title views that overlap `[start, end)`, as `(address, bytes)`.
+pub(crate) fn views_between(start: usize, end: usize) -> Vec<(usize, usize)> {
+    if start >= end {
+        return Vec::new();
+    }
+    let v = views();
+    let mut out = Vec::new();
+    if let Some((&base, &(bytes, _, _))) = v.views.range(..=start).next_back()
+        && base + bytes > start
+    {
+        out.push((base, bytes));
+    }
+    for (&base, &(bytes, _, _)) in v.views.range(start.saturating_add(1)..end) {
+        out.push((base, bytes));
+    }
+    out
+}
+
+/// The address of the 64 KiB page shown at `page` in every title view that
+/// shows it, `page`'s own address included; empty if `page` is not a view.
+pub(crate) fn pages_of(page: usize) -> Vec<usize> {
+    let v = views();
+    let Some((&base, &(bytes, section, offset))) = v.views.range(..=page).next_back() else {
+        return Vec::new();
+    };
+    let within = page.wrapping_sub(base);
+    if within >= bytes || !within.is_multiple_of(K64) {
+        return Vec::new();
+    }
+    v.pages.get(&(section, offset + within as u64)).cloned().unwrap_or_default()
+}
+
+/// The title views that show any of the physical bytes `[offset, offset +
+/// len)` of `section`, as `(address, bytes)` ranges in address order; not
+/// those of a page shown in very many views (`MANY_VIEWS`).
+pub(crate) fn views_of_section(section: usize, offset: u64, len: usize) -> Vec<(usize, usize)> {
+    if len == 0 {
+        return Vec::new();
+    }
+    let v = views();
+    let end = offset.saturating_add(len as u64);
+    let mut pages: Vec<usize> = Vec::new();
+    let mut at = offset - offset % K64 as u64;
+    while at < end {
+        if let Some(shown) = v.pages.get(&(section, at))
+            && shown.len() <= crate::watch::MANY_VIEWS
+        {
+            pages.extend(shown.iter().copied());
+        }
+        match at.checked_add(K64 as u64) {
+            Some(next) => at = next,
+            None => break,
+        }
+    }
+    pages.sort_unstable();
+    pages.dedup();
+    let mut runs: Vec<(usize, usize)> = Vec::with_capacity(pages.len());
+    for page in pages {
+        match runs.last_mut() {
+            Some((first, bytes)) if *first + *bytes == page => *bytes += K64,
+            _ => runs.push((page, K64)),
+        }
+    }
+    runs
 }
 
 /// How the views cover `[at, at + len)`.
@@ -1074,6 +1294,112 @@ mod tests {
             assert!(!private_whole(base as usize, 2 * K64), "a guarded page");
             mem::VirtualFree(base.cast(), 0, mem::MEM_RELEASE);
         }
+    }
+
+    /// The pages a span rounds to, and both ways rounding leaves the
+    /// address space: adding past its end, and the 64 KiB multiple past it.
+    ///
+    /// Mutation run 2026-11-25: with `checked_add` written as `+` and
+    /// `checked_next_multiple_of` as `next_multiple_of`, the three
+    /// end-of-space cases below panic instead of answering `None`.
+    #[test]
+    fn aligned_span_rounds_to_64k_and_rejects_overflow() {
+        let k = K64 as u64;
+        assert_eq!(aligned_span(0, k), Some((0, k)));
+        assert_eq!(aligned_span(0x1230, 2 * k + 5), Some((0, 3 * k)));
+        assert_eq!(aligned_span(k + 1, 1), Some((k, k)), "one byte into the second page");
+        // A zero length still asks for a page, as the console's spans did.
+        assert_eq!(aligned_span(k, 0), Some((k, k)));
+        // The last page that fits.
+        assert_eq!(
+            aligned_span(u64::MAX - 2 * k + 1, k),
+            Some((u64::MAX - 2 * k + 1, k))
+        );
+        // Adding past the end of the address space.
+        assert_eq!(aligned_span(u64::MAX, 1), None);
+        assert_eq!(aligned_span(u64::MAX - 1, 2), None);
+        assert_eq!(aligned_span(u64::MAX - k + 1, k), None);
+        // Adding inside it, but the multiple is past it.
+        assert_eq!(aligned_span(u64::MAX - k + 1, 1), None);
+        // A length no multiple can cover.
+        assert_eq!(aligned_span(0, u64::MAX), None);
+    }
+
+    /// The check and the claim are one step: eight threads racing for four
+    /// pages of room leave exactly four holding it, and a release gives the
+    /// room back.
+    ///
+    /// The threads wait on a barrier so all eight ask at once: without it
+    /// thread creation staggers them and a two-step check-then-claim passes
+    /// (measured 2026-11-25 -- three runs green with the race in place and no
+    /// barrier). A race test cannot be made certain; this one is made likely,
+    /// and what it cannot catch is a schedule that never overlaps.
+    #[test]
+    fn budget_reserve_enforces_its_limit_under_threads() {
+        let count = AtomicU64::new(0);
+        let limit = 4 * K64 as u64;
+        let won = AtomicU64::new(0);
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    if try_reserve_at(&count, K64 as u64, limit) {
+                        won.fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+        assert_eq!(won.load(Ordering::Relaxed), 4, "the limit is never passed");
+        assert_eq!(count.load(Ordering::Relaxed), limit);
+        // Full: one more byte is refused.
+        assert!(!try_reserve_at(&count, 1, limit));
+        // A release gives the room back.
+        release_at(&count, K64 as u64);
+        assert!(try_reserve_at(&count, K64 as u64, limit));
+        // A claim the counter cannot hold is refused, not wrapped.
+        count.store(u64::MAX - 1, Ordering::Relaxed);
+        assert!(!try_reserve_at(&count, 4, u64::MAX));
+    }
+
+    /// Stage 2 assumes nothing reads title memory that a submission not yet
+    /// run writes through a placed buffer, which late waits break. A title
+    /// buffer is refused there; a window outside buffers is not, being a
+    /// copy the flights already account for.
+    ///
+    /// Mutation runs 2026-11-25, both restored: `refuses_late_wait` losing
+    /// its `!window` fails the truth table, and the guard removed from
+    /// `place_for_with` leaves the counted refusal unraised, which the
+    /// counter assertion catches where the `None` alone would not.
+    #[test]
+    fn late_waits_refuse_a_title_buffer_in_place_but_not_a_window() {
+        let switches = |level, late| Switches { level, late };
+        // The rule itself, which knows nothing of the stages: a window is a
+        // copy the flights account for, a title buffer is not.
+        assert!(switches(2, true).refuses_late_wait(false));
+        assert!(!switches(2, true).refuses_late_wait(true), "a window is a copy");
+        assert!(!switches(2, false).refuses_late_wait(false));
+
+        // Refused, counted, and nothing asked of the host.
+        let before = STATS[8].load(Ordering::Relaxed);
+        assert!(place_for_with(switches(2, true), 0x1000, 2 * K64 as u64, false).is_none());
+        assert_eq!(STATS[8].load(Ordering::Relaxed), before + 1, "the refusal is counted");
+        // Below stage 2 the question does not arise, and nothing is counted.
+        let before = STATS[8].load(Ordering::Relaxed);
+        assert!(place_for_with(switches(1, true), 0x1000, 2 * K64 as u64, false).is_none());
+        assert_eq!(STATS[8].load(Ordering::Relaxed), before, "not counted");
+    }
+
+    /// A span the address space cannot hold is turned down without asking
+    /// the host, where the wrapping add and the rounding after it used to
+    /// panic or reserve a page near the end.
+    #[test]
+    fn warp_place_part_refuses_a_span_past_the_address_space() {
+        let Some(device) = warp() else { return };
+        assert!(matches!(place_part(&device, u64::MAX, 1), Err(None)));
+        assert!(matches!(place_part(&device, u64::MAX - 1, 2), Err(None)));
+        // The add stays inside the space; the 64 KiB multiple does not.
+        assert!(matches!(place_part(&device, u64::MAX - K64 as u64 + 1, 1), Err(None)));
     }
 
     pub(crate) fn warp() -> Option<ID3D12Device> {

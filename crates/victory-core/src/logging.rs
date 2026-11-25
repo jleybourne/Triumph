@@ -18,12 +18,22 @@ const CAP: LevelFilter = if cfg!(feature = "diagnostics") {
 };
 
 pub fn init(default_level: &str) {
+    init_with(default_level, None::<tracing_subscriber::layer::Identity>);
+}
+
+/// [`init`] plus a layer that sees every event the filter lets through
+/// (e.g. the diagnostics stats stream).
+pub fn init_with<L>(default_level: &str, extra: Option<L>)
+where
+    L: tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+{
     let filter = std::env::var("VICTORY_LOG")
         .or_else(|_| std::env::var("RUST_LOG"))
         .ok()
         .and_then(|v| EnvFilter::try_new(v).ok())
         .unwrap_or_else(|| EnvFilter::new(default_level));
     let _ = tracing_subscriber::registry()
+        .with(extra)
         .with(CAP)
         .with(filter)
         .with(

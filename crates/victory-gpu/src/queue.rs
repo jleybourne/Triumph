@@ -44,15 +44,15 @@ const _: () = assert!(std::mem::offset_of!(Queue, kind) == 0x10);
 /// One thing a waiting queue holds back.
 #[cfg(windows)]
 enum Held {
-    /// The queue waits for the fence (its address) to reach the value.
-    Wait(usize, u64),
+    /// The queue waits for the fence to reach the value.
+    Wait(crate::fence::FenceRef, u64),
     /// A list of the next submission waits for a memory value.
     Value(crate::list::ValueWait),
     /// A submission: the lists' host sides, taken from the title's lists
     /// (which it may reset meanwhile), and the order they run in.
     Run(Vec<crate::list::Detached>, Vec<usize>),
     /// A signal of the queue's, due after what it holds before it.
-    Signal(usize, u64),
+    Signal(crate::fence::FenceRef, u64),
 }
 
 /// The queues that hold something (their addresses).
@@ -300,21 +300,29 @@ fn hold(this: This, what: impl FnOnce() -> Held) -> bool {
     true
 }
 
-/// Runs what waiting queues hold as far as their fences have been reached
-/// (`all`: all of it), each queue's in the order it was given. Called
-/// where a fence may have moved: after a signal and after a submission (a
-/// list's bottom-of-pipe write may be into a fence), never from inside
-/// one.
+/// One caller of [`release_held`] at a time, so a queue's submissions keep
+/// their order; also serializes queue teardown in [`release`] so a queue
+/// present in `WAITING` cannot be freed while [`release_held`] iterates it.
+/// Lock order: `RELEASING` -> `WAITING`.
 #[cfg(windows)]
-pub(crate) fn release_held(all: bool) {
-    // One caller at a time, so a queue's submissions keep their order.
-    static RELEASING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static RELEASING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Runs what waiting queues hold as far as their fences have been reached,
+/// each queue's in the order it was given. With `force`, bypass waits only
+/// after running all ready work. Called after a signal or a submission
+/// (a list's bottom-of-pipe write may be into a fence), never inside one.
+#[cfg(windows)]
+pub(crate) fn release_held(force: bool) {
     if lock(&WAITING).is_empty() {
         return;
     }
     let _one = lock(&RELEASING);
+    let mut forcing = false;
     loop {
         let queues = lock(&WAITING).clone();
+        if queues.is_empty() {
+            break;
+        }
         let mut moved = false;
         for q in queues {
             // SAFETY: a live queue: one released is taken off the list.
@@ -323,12 +331,12 @@ pub(crate) fn release_held(all: bool) {
             loop {
                 match held.first() {
                     None => break,
-                    Some(&Held::Wait(fence, value))
-                        if !all && crate::fence::completed(fence as This) < value =>
+                    Some(Held::Wait(fence, value))
+                        if !forcing && crate::fence::completed(fence.as_this()) < *value =>
                     {
                         break;
                     }
-                    Some(Held::Value(wait)) if !all && !value_met(wait) => break,
+                    Some(Held::Value(wait)) if !forcing && !value_met(wait) => break,
                     Some(_) => {}
                 }
                 match held.remove(0) {
@@ -336,7 +344,7 @@ pub(crate) fn release_held(all: bool) {
                     Held::Value(wait) => {
                         // Passed at a present without being met: what the
                         // queue stood at.
-                        if all && !value_met(&wait) {
+                        if forcing && !value_met(&wait) {
                             static SEEN: AtomicU64 = AtomicU64::new(0);
                             if SEEN.fetch_add(1, Ordering::Relaxed) < 16 {
                                 tracing::warn!(
@@ -351,7 +359,7 @@ pub(crate) fn release_held(all: bool) {
                         #[cfg(feature = "diagnostics")]
                         crate::capture::op(q, || {
                             format!(
-                                "RUN held submission of {} lists (forced {all})",
+                                "RUN held submission of {} lists (forced {forcing})",
                                 order.len()
                             )
                         });
@@ -392,7 +400,7 @@ pub(crate) fn release_held(all: bool) {
                                 crate::list::recycle(lists, &order);
                             }
                         }
-                        if all {
+                        if forcing {
                             #[cfg(feature = "diagnostics")]
                             crate::copystat::add(crate::copystat::C::Forced, 1);
                             static ONCE: AtomicBool = AtomicBool::new(false);
@@ -406,8 +414,8 @@ pub(crate) fn release_held(all: bool) {
                     // Behind what was sent to the card and not waited
                     // for, if anything was.
                     Held::Signal(fence, value) => {
-                        if !crate::host::late_signal(fence, value) {
-                            crate::fence::set(fence as This, value);
+                        if let Err(fence) = crate::host::late_signal(fence, value) {
+                            crate::fence::set(fence.as_this(), value);
                         }
                     }
                 }
@@ -418,7 +426,10 @@ pub(crate) fn release_held(all: bool) {
             }
         }
         if !moved {
-            break;
+            if !force || forcing {
+                break;
+            }
+            forcing = true;
         }
     }
 }
@@ -503,12 +514,13 @@ extern "system" fn query(this: This, iid: *const Iid, out: *mut This) -> HRESULT
     )
 }
 extern "system" fn release(this: This) -> u32 {
-    let left = object::release_boxed::<Queue>(this);
-    #[cfg(windows)]
-    if left == 0 {
-        lock(&WAITING).retain(|&q| q != this as usize);
-    }
-    left
+    object::release_boxed_with::<Queue>(this, || {
+        #[cfg(windows)]
+        {
+            let _one = lock(&RELEASING);
+            lock(&WAITING).retain(|&q| q != this as usize);
+        }
+    })
 }
 
 /// Runs the lists' host lists and waits for them (decision 0007). A queue
@@ -616,13 +628,15 @@ extern "system" fn signal(this: This, fence: This, value: u64) -> HRESULT {
     }
     // A queue that waits signals after what it holds.
     #[cfg(windows)]
-    if hold(this, || Held::Signal(fence as usize, value)) {
+    if hold(this, || Held::Signal(crate::fence::FenceRef::new(fence), value)) {
         return S_OK;
     }
     // Behind the submissions sent to the card and not waited for: the
     // fence is set when they are settled.
     #[cfg(windows)]
-    if crate::host::late_signal(fence as usize, value) {
+    if crate::host::late()
+        && crate::host::late_signal(crate::fence::FenceRef::new(fence), value).is_ok()
+    {
         return S_OK;
     }
     let _ = this;
@@ -655,7 +669,7 @@ extern "system" fn wait(this: This, fence: This, value: u64) -> HRESULT {
             let mut held = lock(&queue(this).held);
             let behind = !held.is_empty() || now < value;
             if behind && waits() {
-                held.push(Held::Wait(fence as usize, value));
+                held.push(Held::Wait(crate::fence::FenceRef::new(fence), value));
             }
             behind
         };
@@ -768,13 +782,9 @@ extern "system" fn present(
         crate::host::settle_for_present();
         release_held(false);
         crate::host::settle_for_present();
-    } else if crate::host::late() {
-        // The present is sent ahead too: what waits for a value a flight
-        // will write runs behind that flight, and nothing is settled here.
-        release_held(false);
     }
-    // shortcut: what a queue still holds at a present runs now, whatever
-    // its fence: a wait is not kept across frames.
+    // Ready work runs first, including work that can follow an in-flight
+    // memory write. The fallback runs whatever remains held at a present.
     #[cfg(windows)]
     release_held(forces());
     let frame = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1045,6 +1055,53 @@ mod tests {
         assert_eq!(slot::<extern "system" fn(This) -> u32>(q, 0x10)(q), 0);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn present_runs_ready_fence_producer_before_blocked_consumer() {
+        let null = std::ptr::null();
+        let desc = QueueDesc {
+            kind: 0,
+            priority: 0,
+            flags: 0,
+            nodes: 0,
+        };
+        let mut consumer = null;
+        let mut producer = null;
+        assert_eq!(create(null, &desc, &QUEUE_IIDS[0], &mut consumer), S_OK);
+        assert_eq!(create(null, &desc, &QUEUE_IIDS[0], &mut producer), S_OK);
+        let mut fences = [null; 3];
+        for fence in &mut fences {
+            assert_eq!(
+                crate::fence::create(null, 0, 0, &crate::fence::FENCE_IIDS[0], fence),
+                S_OK
+            );
+        }
+        let [ready, dependency, sequence] = fences;
+
+        assert_eq!(wait(consumer, dependency, 1), S_OK);
+        assert_eq!(signal(consumer, sequence, 2), S_OK);
+        assert_eq!(wait(producer, ready, 1), S_OK);
+        assert_eq!(signal(producer, sequence, 1), S_OK);
+        assert_eq!(signal(producer, dependency, 1), S_OK);
+        assert_eq!(crate::fence::completed(sequence), 0);
+
+        // A fence signal publishes its value before it wakes waiting queues.
+        // Let a present enter in that interval.
+        crate::fence::set(ready, 1);
+        assert_eq!(present(consumer, 0, null.cast(), null.cast()), S_OK);
+        let last = crate::fence::completed(sequence);
+        for q in [consumer, producer] {
+            assert_eq!(release(q), 0);
+        }
+        for fence in fences {
+            assert_eq!(
+                slot::<extern "system" fn(This) -> u32>(fence, 0x10)(fence),
+                0
+            );
+        }
+        assert_eq!(last, 2, "the consumer must signal after the producer");
+    }
+
     /// The title's compute queue: `{COMPUTE, 0, pipe 1, queue 0}`.
     #[test]
     fn console_queues_are_created_as_on_pc() {
@@ -1081,5 +1138,105 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
         Written::GpuTimestamp.write(at[1..].as_mut_ptr().cast(), 8);
         assert!(at[1] > first);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn release_waits_for_release_held_before_freeing_waiting_queue() {
+        let null = std::ptr::null();
+        let desc = QueueDesc {
+            kind: 0,
+            priority: 0,
+            flags: 0,
+            nodes: 0,
+        };
+        let mut q = null;
+        assert_eq!(create(null, &desc, &QUEUE_IIDS[0], &mut q), S_OK);
+        let mut fence = null;
+        assert_eq!(
+            crate::fence::create(null, 0, 0, &crate::fence::FENCE_IIDS[0], &mut fence),
+            S_OK
+        );
+        // Queue waits on an unsignaled fence, registering `q` in `WAITING`.
+        assert_eq!(wait(q, fence, 1), S_OK);
+        let q_addr = q as usize;
+        assert!(lock(&WAITING).contains(&q_addr));
+
+        // Hold `RELEASING` (as `release_held` does while iterating `WAITING`).
+        // Releasing the last reference to `q` must wait before freeing `q` and
+        // must remove `q` from `WAITING` before dropping its allocation.
+        let guard = lock(&RELEASING);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let releaser = std::thread::spawn(move || {
+            let left = slot::<extern "system" fn(This) -> u32>(q_addr as This, 0x10)(q_addr as This);
+            let _ = done_tx.send(left);
+        });
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(40))
+                .is_err(),
+            "queue::release freed queue while release_held lock was held"
+        );
+        drop(guard);
+        let left = done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("queue::release finished");
+        assert_eq!(left, 0);
+        assert!(!lock(&WAITING).contains(&q_addr));
+        releaser.join().unwrap();
+        assert_eq!(slot::<extern "system" fn(This) -> u32>(fence, 0x10)(fence), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn held_wait_and_signal_retain_fences_until_released() {
+        use std::ffi::c_void;
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+
+        let null = std::ptr::null();
+        let desc = QueueDesc {
+            kind: 0,
+            priority: 0,
+            flags: 0,
+            nodes: 0,
+        };
+        let mut q = null;
+        assert_eq!(create(null, &desc, &QUEUE_IIDS[0], &mut q), S_OK);
+        let fence_iid = &crate::fence::FENCE_IIDS[0];
+        let mut f1 = null;
+        let mut f2 = null;
+        assert_eq!(crate::fence::create(null, 0, 0, fence_iid, &mut f1), S_OK);
+        assert_eq!(crate::fence::create(null, 0, 0, fence_iid, &mut f2), S_OK);
+
+        // SAFETY: manual-reset Win32 event for fence completion.
+        let ev = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        assert!(!ev.is_null());
+        let set_event = slot::<extern "system" fn(This, u64, *mut c_void) -> HRESULT>(f2, 0x48);
+        assert_eq!(set_event(f2, 7, ev), S_OK);
+
+        // Queue waits on f1 == 1, then holds a signal on f2 == 7.
+        assert_eq!(wait(q, f1, 1), S_OK);
+        assert_eq!(signal(q, f2, 7), S_OK);
+
+        // Title drops its reference on f2 immediately; Held::Signal keeps it alive.
+        let rel2 = slot::<extern "system" fn(This) -> u32>(f2, 0x10);
+        assert_eq!(rel2(f2), 1, "Held::Signal must retain a COM ref on f2");
+
+        // Confirm Held::Wait retains a COM ref on f1 as well.
+        let add1 = slot::<extern "system" fn(This) -> u32>(f1, 0x08);
+        let rel1 = slot::<extern "system" fn(This) -> u32>(f1, 0x10);
+        assert_eq!(add1(f1), 3, "test + Held::Wait + add1");
+        assert_eq!(rel1(f1), 2);
+
+        // Satisfying f1 drains Held::Wait(f1, 1) and Held::Signal(f2, 7), setting
+        // the event and releasing both internal FenceRefs without UAF or leaks.
+        assert_eq!(crate::fence::signal(f1, 1), S_OK);
+        // SAFETY: valid Win32 event handle.
+        assert_eq!(unsafe { WaitForSingleObject(ev, 0) }, WAIT_OBJECT_0);
+        // SAFETY: closing the test event handle.
+        unsafe { CloseHandle(ev) };
+        assert_eq!(rel1(f1), 0, "f1 internal ref must drop after release_held");
+        assert_eq!(slot::<extern "system" fn(This) -> u32>(q, 0x10)(q), 0);
     }
 }

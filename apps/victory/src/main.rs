@@ -122,6 +122,10 @@ enum Console {
 }
 
 fn main() -> Result<()> {
+    // Diagnostics: `VICTORY_DIAG_PORT` adds the PalmVI dashboard's stream.
+    #[cfg(all(windows, feature = "diagnostics"))]
+    victory_core::logging::init_with("info", victory_gpu::diagstream::layer());
+    #[cfg(not(all(windows, feature = "diagnostics")))]
     victory_core::logging::init("info");
     // The audio recorder `run` starts for `VICTORY_AUDIO_CAPTURE`.
     #[cfg(all(windows, feature = "diagnostics"))]

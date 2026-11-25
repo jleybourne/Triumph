@@ -295,6 +295,7 @@ mod tests {
             cols,
             usage: 0,
             half: false,
+            packed: false,
         }
     }
 

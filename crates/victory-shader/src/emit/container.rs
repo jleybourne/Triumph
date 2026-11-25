@@ -22,9 +22,52 @@ pub(crate) struct SigElement {
     pub usage: u8,
     /// 16-bit on the console (declared 32-bit here).
     pub half: bool,
+    /// A 16-bit element the host declares packed ([`SigElement::host`]):
+    /// a mesh shader and the pixel shader it feeds, translated together
+    /// (`emit::Link`), carry two of its channels per 32-bit column. While
+    /// lowering, `cols`, `usage` and the channels stores and reads name
+    /// stay the console's 16-bit ones.
+    pub packed: bool,
 }
 
 impl SigElement {
+    /// The columns the host declares: two 16-bit channels per column when
+    /// `packed`.
+    pub(crate) fn host_cols(&self) -> u8 {
+        if self.packed {
+            self.cols.div_ceil(2)
+        } else {
+            self.cols
+        }
+    }
+
+    /// The host column (relative to `col`, as `ch` is) that holds channel
+    /// `ch` of a packed element, and whether the channel is its high half.
+    pub(crate) fn packed_column(ch: u8) -> (u8, bool) {
+        (ch / 2, ch % 2 == 1)
+    }
+
+    /// The element as the host declares it: a packed one is an unsigned
+    /// integer, constant (each pixel weighs its three vertices' halves
+    /// itself), of half the columns.
+    pub(crate) fn host(&self) -> SigElement {
+        if !self.packed {
+            return self.clone();
+        }
+        let usage = (0..self.cols)
+            .filter(|c| self.usage >> c & 1 != 0)
+            .fold(0, |u, c| u | 1 << Self::packed_column(c).0);
+        SigElement {
+            comp: 5,
+            interp: 1,
+            cols: self.host_cols(),
+            usage,
+            half: false,
+            packed: false,
+            ..self.clone()
+        }
+    }
+
     fn system_value(&self) -> u32 {
         match self.kind {
             1 => 6,  // vertex id
@@ -72,7 +115,9 @@ pub(crate) fn signature(elements: &[SigElement], input: bool) -> Vec<u8> {
     // Validator 1.6 writes one name per element in element order, repeats
     // included, except that system values share theirs (it keys names by
     // the semantic's string, which is one static string per system value);
-    // the rows sorted by register (unallocated last).
+    // the rows are stably sorted by register (unallocated last), keeping
+    // element order within a row (a row's elements need not be in column
+    // order).
     let mut offsets: Vec<u32> = Vec::new();
     let mut next = 8 + 32 * elements.len() as u32;
     let mut names = Vec::new();
@@ -90,7 +135,7 @@ pub(crate) fn signature(elements: &[SigElement], input: bool) -> Vec<u8> {
         }
     }
     let mut order: Vec<usize> = (0..elements.len()).collect();
-    order.sort_by_key(|&i| (elements[i].row.unwrap_or(u32::MAX), elements[i].col));
+    order.sort_by_key(|&i| elements[i].row.unwrap_or(u32::MAX));
     for i in order {
         let (e, offset) = (&elements[i], offsets[i]);
         let used = e.usage << e.col;
@@ -121,13 +166,15 @@ pub(crate) const MESH_OUTPUT_LIMIT: u64 = 32 * 1024;
 /// A mesh shader's output size as the DXIL validator measures it against
 /// [`MESH_OUTPUT_LIMIT`]: 4 bytes per component of every vertex element
 /// and primitive element, times the maxima rounded up to multiples of 32.
+/// A 16-bit value costs the same 4 bytes (#283): only packing two per
+/// column ([`SigElement::packed`]) halves what they take.
 pub(crate) fn mesh_output_bytes(
     vertex: &[SigElement],
     primitive: &[SigElement],
     max_vertices: u32,
     max_primitives: u32,
 ) -> u64 {
-    let scalars = |els: &[SigElement]| els.iter().map(|e| u64::from(e.cols)).sum::<u64>();
+    let scalars = |els: &[SigElement]| els.iter().map(|e| u64::from(e.host_cols())).sum::<u64>();
     let align = |n: u32| u64::from(n).next_multiple_of(32);
     4 * (scalars(vertex) * align(max_vertices) + scalars(primitive) * align(max_primitives))
 }
@@ -235,15 +282,12 @@ pub(crate) fn psv(p: &Psv) -> Vec<u8> {
     let mut indices: Vec<u32> = Vec::new();
     let mut elements = Vec::new();
     for e in p.inputs.iter().chain(p.outputs).chain(p.prims) {
-        let name = if e.kind == 0 {
-            let needle: Vec<u8> = e.name.bytes().chain([0]).collect();
-            match find(&strings, &needle) {
-                Some(at) => at,
-                None => {
-                    strings.extend(&needle);
-                    strings.len() - needle.len()
-                }
-            }
+        // As the PSV writer does: each arbitrary semantic name, repeats
+        // included; system values and empty names at offset 0.
+        let name = if e.kind == 0 && !e.name.is_empty() {
+            let at = strings.len();
+            strings.extend(e.name.bytes().chain([0]));
+            at
         } else {
             0
         };
@@ -300,10 +344,6 @@ pub(crate) fn psv(p: &Psv) -> Vec<u8> {
         }
     }
     out
-}
-
-fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).position(|w| w == needle)
 }
 
 /// The container: parts in order, hashed.
@@ -415,5 +455,40 @@ mod tests {
             .map(|b| format!("{b:02x}"))
             .collect();
         assert_eq!(hex, "900150983cd24fb0d6963f7d28e17f72");
+    }
+
+    fn element(row: u32, col: u8, cols: u8) -> SigElement {
+        SigElement {
+            name: "TEXCOORD".into(),
+            index: row,
+            kind: 0,
+            comp: 9,
+            interp: 2,
+            row: Some(row),
+            col,
+            cols,
+            usage: 0,
+            half: false,
+            packed: false,
+        }
+    }
+
+    #[test]
+    fn psv_repeats_arbitrary_semantic_names() {
+        let bytes = psv(&Psv {
+            stage: 1,
+            flag: false,
+            inputs: &[],
+            outputs: &[element(0, 0, 4), element(1, 0, 4)],
+            prims: &[],
+            mesh: None,
+            bindings: &[],
+            threads: [0; 3],
+            wave_size: None,
+            geometry: None,
+        });
+        let strings = b"\0TEXCOORD\0TEXCOORD\0\0";
+        assert_eq!(bytes[56..60], (strings.len() as u32).to_le_bytes());
+        assert_eq!(&bytes[60..60 + strings.len()], strings);
     }
 }

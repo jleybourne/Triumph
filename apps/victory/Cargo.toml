@@ -12,9 +12,9 @@ victory-core.workspace = true
 victory-pe.workspace = true
 victory-loader.workspace = true
 victory-hle.workspace = true
+victory-gpu.workspace = true
 victory-shader = { workspace = true, features = ["host"] }
 victory-game.workspace = true
-victory-gpu.workspace = true
 anyhow.workspace = true
 blake3.workspace = true
 memchr.workspace = true
@@ -26,6 +26,7 @@ walkdir.workspace = true
 # the host debug layer, scripted keys). Off in a plain release build.
 diagnostics = [
     "victory-core/diagnostics",
+    "victory-gpu/diagnostics",
     "victory-hle/diagnostics",
     "victory-loader/diagnostics",
     "victory-shader/diagnostics",
