@@ -380,6 +380,30 @@ fn note_pipeline(shaders: &[Arc<Shader>]) {
     );
 }
 
+/// What a shader's pipeline description is made of, for a refusal that has
+/// to be traced to a field.
+#[cfg(windows)]
+fn described(shaders: &[Arc<Shader>]) -> String {
+    let mut out = String::new();
+    for s in shaders {
+        match s.translated() {
+            None => out.push_str(&format!(" [{} {} not translated]", s.stage, s.hash)),
+            Some(t) => out.push_str(&format!(
+                " [{} {} user_data={} samplers={} static={} cbvs={} srvs={} uavs={}]",
+                s.stage,
+                s.hash,
+                t.host.user_data.len(),
+                t.host.samplers.len(),
+                t.host.static_samplers.len(),
+                t.host.root_cbvs.len(),
+                t.host.root_srvs.len(),
+                t.host.root_uavs.len(),
+            )),
+        }
+    }
+    out
+}
+
 /// The hash of the first shader, for the record of what was being made.
 fn first_hash(shaders: &[Arc<Shader>]) -> u64 {
     shaders
@@ -599,7 +623,7 @@ impl HostPipeline {
             let pso = match made {
                 Ok(pso) => pso,
                 Err(e) => {
-                    tracing::warn!(error = %e, ?shaders, "host pipeline refused");
+                    tracing::warn!(error = %e, ?shaders, described = %described(shaders), "host pipeline refused");
                     host.log_messages();
                     return None;
                 }
@@ -742,7 +766,7 @@ impl HostPipeline {
         let pso = match made {
             Ok(pso) => pso,
             Err(e) => {
-                tracing::warn!(error = %e, ?shaders, "host pipeline refused");
+                tracing::warn!(error = %e, ?shaders, described = %described(shaders), "host pipeline refused");
                 host.log_messages();
                 return None;
             }
