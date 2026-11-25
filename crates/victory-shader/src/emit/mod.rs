@@ -420,46 +420,6 @@ pub fn emit(
     io: &io::Io,
     res: &resource::Resources,
 ) -> Result<HostShader, ShaderError> {
-    // A wave64 program that writes one dword of EXEC or VCC on its own
-    // (`s_mov_b32 exec_hi, 0`) leaves lanes 32-63 as they were. If a memory
-    // write follows, its guard is that mask -- implicitly, EXEC is not an
-    // operand of a store -- so the guard's upper lanes are not the console's
-    // and this translator has no value for them: refuse. The same instruction
-    // with nothing after it is fine, and still translates.
-    if native.wave64 {
-        for b in &p.blocks {
-            let mut split = false;
-            for inst in &b.insts {
-                let lone = [ir::EXEC, ir::VCC].iter().any(|&r| {
-                    inst.write(ir::Reg::S(r + 1)).is_some()
-                        && inst.write(ir::Reg::S(r)).is_none()
-                });
-                if lone {
-                    split = true;
-                    continue;
-                }
-                let name = inst.name();
-                let memory = name.contains("_store_")
-                    || name.contains("_atomic_")
-                    || name.starts_with("ds_write")
-                    || name.starts_with("ds_add")
-                    || name.starts_with("ds_sub")
-                    || name.starts_with("ds_min")
-                    || name.starts_with("ds_max")
-                    || name.starts_with("ds_and")
-                    || name.starts_with("ds_or")
-                    || name.starts_with("ds_xor")
-                    || name.starts_with("export")
-                    || name.starts_with("exp_");
-                if split && memory {
-                    return Err(ShaderError::Unsupported {
-                        offset: 0,
-                        what: "a memory write under a lane mask written one dword at a time",
-                    });
-                }
-            }
-        }
-    }
     // (what an earlier program's lowering on this thread left behind)
     lower::take_needs();
     let original = emit_program(c, native, p, st, io, res);
