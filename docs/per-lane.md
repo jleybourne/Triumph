@@ -22,6 +22,29 @@ Nothing else in this file is worth doing until that refusal is back and the
 suite is green: a per-lane change measured against a translator that accepts
 malformed masks would be measured against a lie.
 
+### What has been tried against it
+
+Three attempts, each reverted, each narrowing the site:
+
+- **The shape pass (`wave.rs:301`)** folds a constant into lanes 32-63 when the
+  high dword is written alone. Restricting that to whole 64-bit moves changed
+  nothing: `wave.rs` has no refusals at all, so the refusal was never there.
+- **A set of masks whose halves are written at different sites**, refused in
+  `mask_dword` and in the opaque-mask arm. It stays empty for this program:
+  the lone write never becomes a registered pair, so nothing consults it.
+- **A program-level refusal** when a wave64 program writes one dword of EXEC or
+  VCC alone. It makes the intended test pass and breaks
+  `an_exec_high_write_does_not_overflow_the_stack`, which uses the same
+  instruction and must translate: the difference is that its mask is never
+  used afterwards.
+
+The conclusion those three give: the guard that makes this wrong is the
+**implicit EXEC guard of a store**, and the IR does not record EXEC as a read
+of such an instruction (`structure.rs:679` only notes instructions that read
+it explicitly). A refusal therefore has to be tied to deriving a guard for an
+instruction whose EXEC half was written apart, not to the instruction or the
+program.
+
 ## The census
 
 Translating the whole archive (`translate --list`):
