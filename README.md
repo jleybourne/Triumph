@@ -97,6 +97,27 @@ is 2,668 of 2,682.
      material passes are among the ones dropped.
 3. **The first gameplay room** is sometimes not drawn after the cutscene hands over.
 
+### What enabling those passes costs, measured
+
+Turning on the extra compute/material passes (the 32-lane split of console wave64 programs) is
+the obvious way to get surface materials and the ray-traced light, and it is not yet safe. Four
+configurations were measured on the test machine; every one that runs those passes aborts the
+title on its own validity check (`mov [0], tag`), with no device removal and no host error:
+
+| configuration | refusals | result |
+|---|---|---|
+| default (those passes refused) | 23 | runs, 4-6 fps, `removed=0` |
+| `VICTORY_WAVE_WIDE=1` | 9 | aborts |
+| `... WAVE_WIDE=1` skipping the three newly-unlocked compute programs | 9 | aborts |
+| `... WAVE_WIDE=1` skipping the newly-unlocked pixel program | 9 | aborts |
+| `... WAVE_WIDE=1 VICTORY_WAVE_LOCAL=idiom` (only the exact split) | 4 | aborts |
+
+So the abort is not produced by one identifiable pass, and not by the approximate split alone:
+skipping candidates changes nothing, and the exact-only form still aborts. The passes' translated
+output is wrong in some way that is not yet isolated, which is why they stay off by default and why
+"missing textures" and "missing indirect light" appear together. The next person should not
+re-run the bisected skip lists above — they are already done.
+
 ## Milestones
 
 Every change that moves the end result is committed here with its measurement.
