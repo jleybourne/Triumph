@@ -380,6 +380,35 @@ fn note_pipeline(shaders: &[Arc<Shader>]) {
     );
 }
 
+/// Whether a render target format holds integers (and so cannot blend).
+#[cfg(windows)]
+fn integer_format(format: DXGI_FORMAT) -> bool {
+    matches!(
+        format,
+        DXGI_FORMAT_R32G32B32A32_UINT
+            | DXGI_FORMAT_R32G32B32A32_SINT
+            | DXGI_FORMAT_R32G32B32_UINT
+            | DXGI_FORMAT_R32G32B32_SINT
+            | DXGI_FORMAT_R16G16B16A16_UINT
+            | DXGI_FORMAT_R16G16B16A16_SINT
+            | DXGI_FORMAT_R32G32_UINT
+            | DXGI_FORMAT_R32G32_SINT
+            | DXGI_FORMAT_R10G10B10A2_UINT
+            | DXGI_FORMAT_R8G8B8A8_UINT
+            | DXGI_FORMAT_R8G8B8A8_SINT
+            | DXGI_FORMAT_R16G16_UINT
+            | DXGI_FORMAT_R16G16_SINT
+            | DXGI_FORMAT_R32_UINT
+            | DXGI_FORMAT_R32_SINT
+            | DXGI_FORMAT_R8G8_UINT
+            | DXGI_FORMAT_R8G8_SINT
+            | DXGI_FORMAT_R16_UINT
+            | DXGI_FORMAT_R16_SINT
+            | DXGI_FORMAT_R8_UINT
+            | DXGI_FORMAT_R8_SINT
+    )
+}
+
 /// What a shader's pipeline description is made of, for a refusal that has
 /// to be traced to a field.
 #[cfg(windows)]
@@ -708,7 +737,23 @@ impl HostPipeline {
                     BytecodeLength: gs.len(),
                 }
             }),
-            BlendState: g.blend,
+            BlendState: {
+                // A render target format that holds integers cannot blend, and
+                // the driver refuses the whole pipeline over it: the title asks
+                // for blending on a format that cannot.
+                let mut blend = g.blend;
+                let n = (g.targets.NumRenderTargets as usize).min(blend.RenderTarget.len());
+                for (slot, target) in blend.RenderTarget.iter_mut().enumerate().take(n) {
+                    if integer_format(g.targets.RTFormats[slot]) {
+                        *target = D3D12_RENDER_TARGET_BLEND_DESC {
+                            BlendEnable: false.into(),
+                            LogicOpEnable: false.into(),
+                            ..Default::default()
+                        };
+                    }
+                }
+                blend
+            },
             SampleMask: g.sample_mask,
             RasterizerState: g.rasterizer,
             DepthStencilState: g.depth,
@@ -865,7 +910,25 @@ fn mesh_pipeline(
         root: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, root.as_raw()),
         ms: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, ms),
         ps: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, ps),
-        blend: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, g.blend),
+        blend: Sub(
+            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND,
+            // An integer render target cannot blend; the driver refuses the
+            // pipeline over it, so blending is taken off those slots.
+            {
+                let mut blend = g.blend;
+                let n = (g.targets.NumRenderTargets as usize).min(blend.RenderTarget.len());
+                for (slot, target) in blend.RenderTarget.iter_mut().enumerate().take(n) {
+                    if integer_format(g.targets.RTFormats[slot]) {
+                        *target = D3D12_RENDER_TARGET_BLEND_DESC {
+                            BlendEnable: false.into(),
+                            LogicOpEnable: false.into(),
+                            ..Default::default()
+                        };
+                    }
+                }
+                blend
+            },
+        ),
         mask: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK, g.sample_mask),
         raster: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, g.rasterizer),
         depth: Sub(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL, g.depth),
