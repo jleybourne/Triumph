@@ -671,14 +671,7 @@ pub(crate) fn relay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     // Off by default on this fork (fxceless#191 is still open):
     // `VICTORY_RELAY=1` or `=2` turns it on.
-    // On by default: with submission synchronous the card sat at 5-9% busy while
-    // a frame took seconds on the host. `VICTORY_RELAY=0` turns it off, `=1`
-    // asks for the first stage only.
-    *ON.get_or_init(|| {
-        std::env::var("VICTORY_RELAY")
-            .map_or(true, |v| v == "1" || v == "2")
-            && !keeps()
-    })
+    *ON.get_or_init(|| std::env::var("VICTORY_RELAY").is_ok_and(|v| v == "1" || v == "2") && !keeps())
 }
 
 /// The submission being prepared (its number among those started): what

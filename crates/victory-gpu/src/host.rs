@@ -2003,8 +2003,7 @@ fn relay_exact() -> bool {
     // Stage 2 unless `VICTORY_RELAY=1` asks for the first one (the default
     // since the walls of the first room were found drawn in every run with
     // this set and in fewer than half without it).
-    // Stage 2 unless another stage is asked for; `VICTORY_RELAY=0` turns it off.
-    *ON.get_or_init(|| relay() && std::env::var_os("VICTORY_RELAY").is_none_or(|v| v != "0"))
+    *ON.get_or_init(|| relay() && std::env::var_os("VICTORY_RELAY").is_none_or(|v| v == "2"))
 }
 
 /// Told when something joins [`LINE`], for the thread that lands flights
