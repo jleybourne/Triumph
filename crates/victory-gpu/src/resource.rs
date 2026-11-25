@@ -178,8 +178,8 @@ fn footprint(desc: &ResourceDesc) -> Option<AllocationInfo> {
         && let Some(t) = texture_layout(desc)
     {
         // As the console: the layout's own alignment unless more is asked
-        // (4 KiB for 4 KiB modes, where PC says 64 KiB). Grand Theft Auto
-        // VI keeps these sizes in its texture tables, and its streaming
+        // (4 KiB for 4 KiB modes, where PC says 64 KiB).
+        // The title keeps these sizes in its texture tables, and its streaming
         // asserts when they disagree with the streamed layout.
         let alignment = desc.alignment.max(t.alignment);
         if !alignment.is_power_of_two() {
@@ -239,8 +239,8 @@ pub(crate) fn pc_format(format: u32) -> u32 {
 
 /// The format of a texture the host GPU renders to or writes as unordered
 /// access, for the title's `format`. The console's GPU does both with the
-/// 16-bit colour formats B5G5R5A1 (86) and B4G4R4A4 (115), and Grand Theft
-/// Auto VI has full-screen targets in both; a host that refuses either use
+/// 16-bit colour formats B5G5R5A1 (86) and B4G4R4A4 (115), and
+/// the title has full-screen targets in both; a host that refuses either use
 /// (NVIDIA) refused the whole texture, so every pass that wrote it drew
 /// nothing. There 8-bit RGBA stands in: the same channels in the same
 /// order, every 4-bit level exact and every 5-bit level within 1/510.
@@ -327,8 +327,8 @@ pub(crate) fn depth_and_unordered(this: This) -> bool {
 /// when a side is used after the other was written
 /// (`HostList::twin_use`).
 /// shortcut: whole textures are copied, not the mips and slices written.
-/// A depth texture with a stencil plane gets a twin for each plane (Grand
-/// Theft Auto VI's tiled lighting writes each pixel's material class into
+/// A depth texture with a stencil plane gets a twin for each plane (
+/// the title's tiled lighting writes each pixel's material class into
 /// the depth plane and masks into the stencil plane, then draws each class
 /// with the depth test "equal"): the stencil plane's is copied through a
 /// buffer, the depth plane's is drawn into the plane by a pass of ours
@@ -921,7 +921,7 @@ static ALLOCATOR: std::sync::OnceLock<(AllocRoutine, FreeRoutine)> = std::sync::
 
 /// Committed resources get their memory from the title's general
 /// allocator, as on the console, where titles hook it to place graphics
-/// memory themselves (Grand Theft Auto VI places its back buffers in a
+/// memory themselves (the title places its back buffers in a
 /// block of its own and checks they fill it). The runtime names it before
 /// the device exists.
 pub fn use_allocator(alloc: AllocRoutine, free: FreeRoutine) {
@@ -1133,7 +1133,7 @@ pub(crate) struct HostTexture {
 type Made = (std::sync::Arc<HostTexture>, Option<std::sync::Arc<Twin>>);
 
 /// A title texture's host side. The host copy is made when something first
-/// uses the texture, not when the title creates it: Grand Theft Auto VI
+/// uses the texture, not when the title creates it: the title
 /// had created 3,871 textures (9.2 GB on the host) before its world's first
 /// frame, of which a frame's lists name some hundreds (run 23), on a card
 /// with 12 GB. A title texture is memory the title has either way; its host
@@ -1189,7 +1189,7 @@ static TARGETS_AT: std::sync::Mutex<std::collections::BTreeMap<u64, usize>> =
 /// same memory, if there is one of the same size, levels and layers with
 /// texels of the same width. The console reads such a texture through the
 /// view as it is
-/// (Grand Theft Auto VI packs light as R9G9B9E5 into R32_UINT textures
+/// (the title packs light as R9G9B9E5 into R32_UINT textures
 /// with compute shaders, which cannot write R9G9B9E5, and samples them
 /// through R9G9B9E5 views placed at the textures' addresses: the sky, the
 /// sky and light probes, the bounced light the lighting pass adds). On the
@@ -1358,9 +1358,9 @@ pub(crate) fn host_made<'a>(
 /// shaders that pick textures by index (`draw.rs` `heap_textures`): always
 /// up to `FLOOR` bytes of them, beyond that while the card's memory in use
 /// by this process is under nine tenths of the budget the system gives it
-/// (`VICTORY_TEXTURE_BUDGET_MB` sets a limit on those copies' bytes
-/// instead). Past the budget the system moves the card's memory into the
-/// PC's, which ended runs 20 and 24.
+/// ([`room_percent`] says another share; `VICTORY_TEXTURE_BUDGET_MB` sets a
+/// limit on those copies' bytes instead). Past the budget the system moves
+/// the card's memory into the PC's, which ended runs 20 and 24.
 #[cfg(windows)]
 pub(crate) fn room() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
@@ -1379,9 +1379,27 @@ pub(crate) fn room() -> bool {
         return true;
     }
     match crate::host::host().and_then(|h| h.video_memory()) {
-        Some([budget, used, ..]) => used < budget / 10 * 9,
+        Some([budget, used, ..]) => used < budget / 100 * room_percent(),
         None => filled < WITHOUT_BUDGET,
     }
+}
+
+/// The share of the card's budget, in percent, up to which host copies of
+/// textures picked by index are made ([`room`]): 90 unless
+/// `VICTORY_TEXTURE_ROOM_PERCENT` says another (50 to 97). At 90 about a
+/// tenth of the budget, 1,020 MB of 10,200, stays unused while thousands of
+/// textures wait (runs 170-174); the card copies of title buffers from
+/// 1 MiB up take 449 MB more of the card than before (941 against 492),
+/// and 94 gives the textures about that much back.
+#[cfg(windows)]
+fn room_percent() -> u64 {
+    static PERCENT: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *PERCENT.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_ROOM_PERCENT")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map_or(90, |percent| percent.clamp(50, 97))
+    })
 }
 
 /// Lets go of the host copies of textures the title fills that nothing
@@ -1410,12 +1428,12 @@ pub(crate) fn room() -> bool {
 #[cfg(windows)]
 pub(crate) fn let_go_idle() {
     use std::sync::atomic::Ordering::Relaxed;
-    const IDLE_MS: u64 = 5_000;
     const IDLE_FRAMES: u64 = 4;
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if !*ON.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_SWEEP").is_none_or(|v| v != "0")) {
         return;
     }
+    let idle_ms = crate::host::vram_idle_ms(crate::host::host().and_then(|h| h.video_memory()));
     // For the trail (`crate::host::trail`): how many went, their bytes,
     // and the first one.
     let (mut went, mut bytes, mut first) = (0u64, 0u64, None);
@@ -1430,7 +1448,7 @@ pub(crate) fn let_go_idle() {
         let gone = {
             let mut made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
             let idle = made.as_ref().is_some_and(|(host, _)| {
-                crate::host::long_ago(r.host.used.load(Relaxed), IDLE_MS, IDLE_FRAMES)
+                crate::host::long_ago(r.host.used.load(Relaxed), idle_ms, IDLE_FRAMES)
                     && std::sync::Arc::strong_count(host) == 1
                     && crate::host::references(&host.texture) == 1
             });
@@ -1633,7 +1651,7 @@ fn host_texture(
     d.alignment = 0;
     d.flags &= PC_FLAGS;
     // PC refuses depth targets that are also unordered-access (the console
-    // allows both; Grand Theft Auto VI's shadow maps ask for it).
+    // allows both; the title's shadow maps ask for it).
     // The host copy loses the unordered access: shaders write a colour
     // twin instead ([`Twin`]).
     const DEPTH: u32 = 2;
@@ -1895,7 +1913,7 @@ pub(crate) extern "system" fn create_committed(
     )
 }
 
-/// Device method 0x3f8, inferred from Grand Theft Auto VI's calls
+/// Device method 0x3f8, inferred from the title's calls
 /// (title+0x193e1b4: its back buffers, heap flag "allow display"): the
 /// committed resource creation of the enhanced-barrier interfaces,
 /// `(heap, heap flags, desc1, initial layout, clear value, protected
@@ -1958,7 +1976,7 @@ pub(crate) extern "system" fn unregister_page_pool(_: This, handle: usize) -> HR
 }
 
 /// Device method 0x428, one of the `ID3D12Device9` to `ID3D12Device11`
-/// additions. From Grand Theft Auto VI's call: a resource at a virtual
+/// additions. From the title's call: a resource at a virtual
 /// address the title mapped itself, `(address, desc1, initial barrier
 /// layout, clear value, iid, out)`, as `CreatePlacedResourceX` with
 /// enhanced barriers. GPU addresses are CPU addresses, so the resource is
@@ -2008,7 +2026,7 @@ pub(crate) extern "system" fn create_at_address(
 }
 
 /// Textures the title placed in its own memory and views without a
-/// resource object (device 0x230, Grand Theft Auto VI's streamed and
+/// resource object (device 0x230, the title's streamed and
 /// interface textures), by address and description: a resource at that
 /// address, made the first time a draw reads one.
 /// The resource is kept for the run (views and lists name its address);
@@ -2017,6 +2035,24 @@ pub(crate) extern "system" fn create_at_address(
 #[cfg(windows)]
 static PLACED_TEXTURES: std::sync::Mutex<std::collections::BTreeMap<(u64, [u32; 14]), usize>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// The placed textures asked for with filler words set, as asked
+/// (address and description): for [`PLACED_TWINS`].
+#[cfg(windows)]
+static PLACED_RAW: std::sync::Mutex<std::collections::BTreeSet<(u64, [u32; 14])>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Placed textures asked for a second time with other filler words in
+/// their description: each was a second resource and host copy before the
+/// filler was left out of the key ([`texture_at`]).
+#[cfg(windows)]
+static PLACED_TWINS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// See [`PLACED_TWINS`].
+#[cfg(windows)]
+pub(crate) fn placed_filler_twins() -> u64 {
+    PLACED_TWINS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// The bytes of title memory a texture with the resource description
 /// `desc` (as words) takes where the title placed it; `None` for a buffer
@@ -2035,7 +2071,37 @@ pub(crate) fn placed_bytes(desc: &[u32; 14]) -> Option<u64> {
 /// description `desc` (as words), made on first use.
 #[cfg(windows)]
 pub(crate) fn texture_at(address: u64, desc: &[u32; 14]) -> Option<This> {
+    // Words 1 and 13 of the description are the filler of its layout
+    // (after the dimension, and at the end): the title leaves there what
+    // its stack held, and two views of one texture that differed only in
+    // them each got a resource and a host copy of their own, on a card
+    // that fills at world entry. They are not part of what a texture is.
+    // `VICTORY_PLACED_FILLER=1`: kept in the key, as before.
+    static KEPT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let raw = *desc;
+    let mut key = *desc;
+    if !*KEPT.get_or_init(|| std::env::var_os("VICTORY_PLACED_FILLER").is_some_and(|v| v == "1")) {
+        key[1] = 0;
+        key[13] = 0;
+    }
+    let desc = &key;
     let mut map = PLACED_TEXTURES.lock().unwrap_or_else(|e| e.into_inner());
+    // How many resources the filler alone would have added (a count for
+    // the log: `placed_filler_twins`).
+    if raw != key {
+        let mut seen = PLACED_RAW.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.insert((address, raw)) {
+            let others = seen.range((address, [0; 14])..=(address, [u32::MAX; 14])).filter(|(_, r)| {
+                let mut blank = *r;
+                blank[1] = 0;
+                blank[13] = 0;
+                blank == key
+            });
+            if others.count() > 1 {
+                PLACED_TWINS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
     if let Some(&r) = map.get(&(address, *desc)) {
         return Some(r as This);
     }
@@ -2058,6 +2124,7 @@ pub(crate) fn texture_at(address: u64, desc: &[u32; 14]) -> Option<This> {
         return None;
     }
     map.insert((address, *desc), out as usize);
+    crate::texture::placed_in_host_written(address, desc);
     resource(out)
         .host
         .placed
@@ -2346,7 +2413,7 @@ mod tests {
         slot::<Custom>(device, 0xd0)(&mut p, device, 1, 1);
         assert_eq!(p.cpu_pages, 1, "default: not CPU-visible");
 
-        // 0x428: a buffer over memory the title owns, as GTA VI asks.
+        // 0x428: a buffer over memory the title owns, as the title asks.
         type At = extern "system" fn(
             This,
             u64,
