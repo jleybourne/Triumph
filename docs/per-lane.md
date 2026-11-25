@@ -5,6 +5,23 @@ after the stack-buffer change; the GPU's work is the critical path. What the
 card executes is our lowering, and this file measures how far it is from what
 the console's own programs need.
 
+## Before anything else: the gate does not pass
+
+`cargo test -p victory-shader` gives 244 passed, 1 failed:
+
+    emit::tests::a_mask_whose_high_dword_is_rewritten_is_refused
+
+The test builds `s_mov_b32 exec_hi, 0` (and the vcc_hi forms) after a
+compare and expects the translator to refuse the program; it translates
+instead. So a mask whose upper half is rewritten alone is accepted today,
+where lanes 32-63 should take the mask the low dword was first written with.
+That is silent wrong per-lane masking, and it is in the exact machinery the
+per-lane form replaces.
+
+Nothing else in this file is worth doing until that refusal is back and the
+suite is green: a per-lane change measured against a translator that accepts
+malformed masks would be measured against a lie.
+
 ## The census
 
 Translating the whole archive (`translate --list`):
