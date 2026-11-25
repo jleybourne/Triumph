@@ -289,3 +289,14 @@ endorsed by them.
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+### Correction: the shared-pipeline numbers
+
+The commit that shares one host pipeline between identical requests first
+quoted "pipeline creations 256 -> 0, draws 502 -> 4,938". Those figures came
+from a run that used the previous binary: the copy of the new one onto the
+path the runner launches failed with `Device or resource busy`, so the fix
+was not running. Re-measured with the new binary in place: pipeline creations
+in the last 256 operations 256 -> 41, and the run still ends on the same fault
+at +0x23cf683. The sharing reduces how often a driver pipeline is compiled;
+it does not remove the fault, which is a separate defect.
