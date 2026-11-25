@@ -1284,7 +1284,10 @@ impl<'a> Lower<'a> {
                 let crosses = insts().any(|i| {
                     let n = i.name();
                     n.starts_with("v_mbcnt")
-                        || matches!(n, "v_readlane_b32" | "v_writelane_b32")
+                        || matches!(
+                            n,
+                            "v_readlane_b32" | "v_writelane_b32" | "v_permlanex16_b32"
+                        )
                         || n.starts_with("ds_permute")
                         || n.starts_with("ds_bpermute")
                         || reads_mask_as_data(x.st, i)
