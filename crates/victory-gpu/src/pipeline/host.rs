@@ -355,6 +355,31 @@ pub(crate) struct HostPipeline {
 }
 
 /// Logs a pipeline that gets no host pipeline, once per reason.
+/// Creations in the frame being built, so a bulk batch can be measured
+/// against whatever limit the title may have.
+static PIPE_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+static PIPE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Notes one pipeline made, with its place in this frame's batch.
+fn note_pipeline(shaders: &[Arc<Shader>]) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let frame = crate::frame::current();
+    let last = PIPE_FRAME.load(Relaxed);
+    if last != frame && PIPE_FRAME.compare_exchange(last, frame, Relaxed, Relaxed).is_ok() {
+        PIPE_COUNT.store(0, Relaxed);
+    }
+    let n = PIPE_COUNT.fetch_add(1, Relaxed) + 1;
+    crate::recent::note(
+        frame,
+        "pipeline",
+        first_hash(shaders),
+        shaders.len() as u32,
+        n as u32,
+        0,
+        0,
+    );
+}
+
 /// The hash of the first shader, for the record of what was being made.
 fn first_hash(shaders: &[Arc<Shader>]) -> u64 {
     shaders
@@ -580,10 +605,8 @@ impl HostPipeline {
                 }
             };
             tracing::info!(?shaders, "host pipeline");
-        let n = shaders.len() as u32;
-        crate::recent::note(crate::frame::current(), "pipeline", first_hash(shaders), n, 0, 0, 0);
-            let n = shaders.len() as u32;
-            crate::recent::note(crate::frame::current(), "pipeline", first_hash(shaders), n, 0, 0, 0);
+            note_pipeline(shaders);
+            note_pipeline(shaders);
             crate::host::name(&pso, || format!("{shaders:?}"));
             return Some(HostPipeline {
                 compute: true,
@@ -725,8 +748,7 @@ impl HostPipeline {
             }
         };
         tracing::info!(?shaders, "host pipeline");
-        let n = shaders.len() as u32;
-        crate::recent::note(crate::frame::current(), "pipeline", first_hash(shaders), n, 0, 0, 0);
+            note_pipeline(shaders);
         crate::host::name(&pso, || format!("{shaders:?}"));
         tracing::debug!(
             ?shaders,

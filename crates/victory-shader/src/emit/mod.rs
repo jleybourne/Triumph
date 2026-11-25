@@ -503,6 +503,22 @@ pub fn emit(
 /// it translates or a branch cannot be widened. Only where a thread group is one console
 /// wave: with several, the waves of a group would decide differently and a barrier inside
 /// such a branch would wait for threads that never come.
+/// Whether a thread group is split into host-wave pairs. Only groups of a
+/// whole number of 64-lane console waves are; `VICTORY_WAVE_WIDE_MIN_THREADS`
+/// raises the floor, so a run can take the split for the big groups (the
+/// ray-tracing structure builder's, 256 threads) without taking it everywhere.
+fn wide_threads_min(cs: &crate::native::ComputeIo) -> bool {
+    let threads: u32 = cs.threads.iter().product();
+    if threads % 64 != 0 {
+        return false;
+    }
+    let min: u32 = std::env::var("VICTORY_WAVE_WIDE_MIN_THREADS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    threads >= min
+}
+
 fn widen(
     c: &Container,
     native: &NativeProgram,
@@ -518,7 +534,7 @@ fn widen(
         crate::native::StageIo::Cs(_) if !(native.wave64 && lower::host_max_wave() == 32) => {}
         // (a group of several console waves is several pairs of host waves: each pair
         // exchanges through its own dwords, and a barrier is group-wide either way)
-        crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() % 64 == 0 => {}
+        crate::native::StageIo::Cs(cs) if wide_threads_min(&cs) => {}
         crate::native::StageIo::Cs(cs) => {
             if why {
                 eprintln!("WAVE64-WIDE not tried: thread groups of {:?}", cs.threads);

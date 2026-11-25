@@ -98,6 +98,17 @@ pub(crate) fn answer(kind: usize, iid: *const Iid, found: Option<This>, out: *mu
     tracing::warn!(object = KINDS[kind], %iid, "unknown interface");
     // SAFETY: checked non-null.
     unsafe { out.write(std::ptr::null()) };
+    // A null handed back for an interface the title asked for: the record
+    // says so, in case the title then writes through it.
+    crate::recent::note(
+        crate::frame::current(),
+        "no-interface",
+        kind as u64,
+        KINDS[kind].len() as u32,
+        0,
+        0,
+        0,
+    );
     hr
 }
 
