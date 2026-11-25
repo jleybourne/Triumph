@@ -47,3 +47,26 @@ shadow side). Still missing are the second-order terms: bounce onto interior
 walls, the light shafts, and dim detail like the bunk frame. Those come from
 the irradiance-cache and volumetric passes — the same family as the
 volumetrics entries above.
+
+## The texture re-check costs more than it gives, here
+
+Upstream's `a803c87` re-fingerprints every staged texture (48 KiB of its
+title memory) at frames 4, 12, 40, 120 and 400, because the title often
+fills a texture's memory *after* the host copies it, leaving zeros — the
+black-face bug. On this machine that scan is the whole frame:
+
+| | frame time | frame rate | draws/frame |
+|---|---|---|---|
+| re-check on (merged default) | 935-5,591 ms | 1-2 fps | 6,270 |
+| `VICTORY_HEAP_RECHECK=0` | **259-277 ms** | **8-9 fps** | 4,956 |
+
+It is not a reason to turn it off: with it off, a texture uploaded before
+the title filled it keeps zeros for the run, which is exactly the black
+character face and pale hair.
+
+The fix to make is a trigger rather than a schedule. The host already
+tracks which title memory each submission writes (that is what copy-back
+is built on). A staged texture whose memory a submission wrote should be
+looked at again then, once — and no texture should be fingerprinted at all
+when nothing wrote it. That turns a scan of six thousand textures into a
+reaction to real writes, at the same correctness.
