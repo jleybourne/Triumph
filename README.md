@@ -79,8 +79,25 @@ DXIL  14,156 emitted of 14,247 vertex and pixel programs
        8,762 emitted of  8,765 mesh programs
 ```
 
-**25,586 of 25,694 (99.6%).** Compute — the set that builds the frame in a GPU-driven title —
+**25,586 of 25,694 (99.58%).** Compute — the set that builds the frame in a GPU-driven title —
 is 2,668 of 2,682.
+
+What the 108 refusals are, by count of hits:
+
+| hits | reason | first program |
+|---|---|---|
+| 195 | an address in an SGPR that is no root parameter | `GS_VoxelizeGeneric` |
+| 40 | a descriptor chosen by control flow | `PS_TexturedLit_ReflectionMap` |
+| 40 | a descriptor read only as data | `PS_PuddleDetect` |
+| 10 | a hardware SGPR input | `PS_PedTexturedCutOutTint_Zero` |
+| 8 | the first half of an interpolation | `PS_DeferredTextured` |
+| 5 | `v_cvt_f32_f64` | `CS_TransmissionVolumetricsSubmerged` |
+| 2 | a wave sum of 16-bit floats where not every lane runs | `compute_graph` |
+| 6 | single instances (opaque lane mask, `v_permlanex16_b32`, descriptor address or format as data) | `PS_VoxelizeVisiblity`, `CS_WaterTransmittanceOpticalDepth` |
+
+Eight of these reach the world; the rest are voxelisation and the reflection
+families. `docs/remaining-shaders.md` names each of the eight and what
+feature it removes.
 
 ### What is left, in order
 
