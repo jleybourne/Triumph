@@ -1061,7 +1061,16 @@ impl State {
                 None
             };
             if let Some((param, dwords)) = stage.user_data {
-                let mut values = vec![0u32; dwords as usize];
+                // A stack buffer for the usual parameter size: this used to
+                // allocate a Vec a stage a draw, thousands a frame.
+                let mut small = [0u32; 64];
+                let mut large: Vec<u32> = Vec::new();
+                let values: &mut [u32] = if (dwords as usize) <= small.len() {
+                    &mut small[..dwords as usize]
+                } else {
+                    large.resize(dwords as usize, 0);
+                    &mut large[..]
+                };
                 for u in &t.host.user_data {
                     if let RootType::Other(kind) = u.root {
                         values[u.index as usize] =
