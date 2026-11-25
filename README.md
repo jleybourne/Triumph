@@ -39,14 +39,16 @@ This project refers to the game it runs as **New Game 6**.
 
 ## Project status
 
-**The world renders. It is not playable yet: 4 fps, about 260 ms per frame.**
+**The world renders, lit, with nothing dropped: 6 to 8 fps, about 360 ms per frame.**
 
-Measured on the machine below, 2026-11-25, with the world reached and running:
+Measured on the machine below, 2026-11-25, plain launch, no switches set:
 
 ```
-Americas | Victory  4 fps  272.2 ms/frame  4926 draws/frame   (VICTORY_RELAY=2)
-Americas | Victory  2 fps  478.6 ms/frame  5057 draws/frame   (default)
-                                                    device removals: 0
+Americas | Victory  6 fps  387.8 ms/frame  5011 draws/frame
+Americas | Victory  8 fps  356.4 ms/frame  4934 draws/frame
+host pipelines made 2,428 (1,626 graphics and compute, 802 mesh)
+host pipelines refused 0        shaders that do not translate 8
+device removals 0               unhandled exceptions 0
 ```
 
 | What | Status |
@@ -57,9 +59,11 @@ Americas | Victory  2 fps  478.6 ms/frame  5057 draws/frame   (default)
 | Loading into the world | ✅ Works |
 | **World renders** | ✅ **Yes** — geometry, characters, textures, sky, sun, HUD; verified from the presented frame |
 | Input: movement, camera, pause menu (pad and keyboard) | ✅ Works |
-| World draws submitted | ✅ 5,057–6,890 draws/frame |
-| Frame time in the world | ❌ **252–272 ms/frame (4 fps)** with `VICTORY_RELAY=2`, 478 ms without — the budget is ~16 ms |
-| Light in shadow | ❌ Everything the sun does not hit directly is black: the title's ray-traced bounce light and ray-traced lamp/shadow passes do not run yet |
+| World draws submitted | ✅ 4,934–6,990 draws/frame |
+| Host pipelines | ✅ **0 refused.** Every pipeline the world asks for is created (2,428 made) |
+| Frame time in the world | ⚠️ **356–388 ms/frame (6–8 fps)** on a plain launch — the budget is ~16 ms |
+| Ray-traced lighting | ⚠️ The structure builder **runs** (53/53 programs) and shadows resolve; the second-order terms — bounce on interior walls, light shafts — are thin because four volumetric and water programs still do not translate. See `docs/remaining-shaders.md` |
+| Old note | Everything the sun does not hit directly was black: the title's ray-traced bounce light and ray-traced lamp/shadow passes do not run yet |
 | The first gameplay room after the cutscene hands over | ⚠️ Sometimes not drawn |
 | Memory in play | ⚠️ About 24 GB in use |
 | GPU stability | ✅ No device loss in normal runs |
