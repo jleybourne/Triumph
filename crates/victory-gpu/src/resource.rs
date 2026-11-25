@@ -1409,12 +1409,12 @@ fn room_percent() -> u64 {
         std::env::var("VICTORY_TEXTURE_ROOM_PERCENT")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
-            // 70, not 90: at 90 the card sat at 10.5 GB of 12 GB and Windows
+            // 60, not 90: at 90 the card sat at 10.5 GB of 12 GB and Windows
             // spilled about 4.8 GB into system memory, where every access
-            // crosses PCIe. At 70 residency stays near 9.3 GB and the frame
-            // is steady -- 415-440 ms measured, against 948-1,274 ms with
-            // 2 to 5 second outliers.
-            .map_or(70, |percent| percent.clamp(50, 97))
+            // crosses PCIe. Measured in the world at one draw count: 90 was
+            // 425-470 ms a frame, 70 was 316-339, 60 is 271-294, and 50 is no
+            // better than 60.
+            .map_or(60, |percent| percent.clamp(50, 97))
     })
 }
 
