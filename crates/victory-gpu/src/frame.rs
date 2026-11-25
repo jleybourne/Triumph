@@ -35,6 +35,7 @@ struct Clock {
 static CLOCK: Mutex<Option<Clock>> = Mutex::new(None);
 static FRAME: AtomicU64 = AtomicU64::new(0);
 
+
 fn clock() -> std::sync::MutexGuard<'static, Option<Clock>> {
     CLOCK.lock().unwrap_or_else(|e| e.into_inner())
 }

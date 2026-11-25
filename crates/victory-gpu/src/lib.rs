@@ -25,6 +25,7 @@ pub mod device;
 #[cfg(windows)]
 mod draw;
 pub mod dxgi;
+pub mod recent;
 pub mod fence;
 pub mod frame;
 #[cfg(windows)]

@@ -87,6 +87,19 @@ static SAID: std::sync::Mutex<std::collections::VecDeque<String>> =
     std::sync::Mutex::new(std::collections::VecDeque::new());
 const SAID_LINES: usize = 8;
 
+/// Panics and faults print this record of what was run, when the host has one.
+static RECENT: std::sync::OnceLock<fn() -> String> = std::sync::OnceLock::new();
+
+/// Gives the crash report a way to say what was running when it faults. The
+/// host sets this at start-up; without it the report is as it was.
+pub fn set_recent(dump: fn() -> String) {
+    let _ = RECENT.set(dump);
+}
+
+fn recent() -> String {
+    RECENT.get().map(|f| f()).unwrap_or_default()
+}
+
 /// Keeps a line of the title's debug output for the next crash report.
 pub fn note_title_output(line: &str) {
     if line.is_empty() {
@@ -508,6 +521,11 @@ unsafe fn report(what: &str, info: *const EXCEPTION_POINTERS, to_file: bool) {
     ));
     for (i, pc) in unwind(*context).into_iter().enumerate() {
         line(format!("  #{i:<2} {}", locate(pc as usize)));
+    }
+    let ran = recent();
+    if !ran.is_empty() {
+        eprint!("{ran}");
+        text.push_str(&ran);
     }
     if to_file {
         let said = title_output();

@@ -1711,6 +1711,15 @@ impl State {
         }
         #[cfg(feature = "diagnostics")]
         list.note_op(|| self.op_text(format!("dispatch {x}x{y}x{z}"), true));
+        crate::recent::note(
+            crate::frame::current(),
+            "dispatch",
+            self.pipeline as u64,
+            x,
+            y,
+            z,
+            0,
+        );
         // SAFETY: an open list with everything set.
         unsafe { list.list.Dispatch(x, y, z) };
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
@@ -1809,6 +1818,15 @@ impl State {
                 Ok(l6) => {
                     #[cfg(feature = "diagnostics")]
                     list.note_op(|| self.op_text(format!("mesh {x}"), false));
+                    crate::recent::note(
+                        crate::frame::current(),
+                        "mesh",
+                        self.pipeline as u64,
+                        x,
+                        1,
+                        1,
+                        0,
+                    );
                     self.mesh_scissor(list, true);
                     // SAFETY: an open list with everything set.
                     unsafe { l6.DispatchMesh(x, 1, 1) };
@@ -2139,6 +2157,15 @@ impl State {
             };
             #[cfg(feature = "diagnostics")]
             list.note_op(|| self.op_text(format!("draw {count}x{instances}"), false));
+            crate::recent::note(
+                crate::frame::current(),
+                "draw",
+                self.pipeline as u64,
+                count,
+                instances,
+                from,
+                first,
+            );
             // SAFETY: an open list with everything set.
             unsafe {
                 list.list

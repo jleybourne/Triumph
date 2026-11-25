@@ -311,6 +311,14 @@ pub(crate) struct HostPipeline {
 }
 
 /// Logs a pipeline that gets no host pipeline, once per reason.
+/// The hash of the first shader, for the record of what was being made.
+fn first_hash(shaders: &[Arc<Shader>]) -> u64 {
+    shaders
+        .first()
+        .and_then(|s| u64::from_str_radix(&s.hash, 16).ok())
+        .unwrap_or(0)
+}
+
 fn refuse(reason: &'static str, shaders: &[Arc<Shader>]) -> Option<HostPipeline> {
     static SEEN: std::sync::Mutex<Vec<&str>> = std::sync::Mutex::new(Vec::new());
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
@@ -528,6 +536,10 @@ impl HostPipeline {
                 }
             };
             tracing::info!(?shaders, "host pipeline");
+        let n = shaders.len() as u32;
+        crate::recent::note(crate::frame::current(), "pipeline", first_hash(shaders), n, 0, 0, 0);
+            let n = shaders.len() as u32;
+            crate::recent::note(crate::frame::current(), "pipeline", first_hash(shaders), n, 0, 0, 0);
             crate::host::name(&pso, || format!("{shaders:?}"));
             return Some(HostPipeline {
                 compute: true,
@@ -669,6 +681,8 @@ impl HostPipeline {
             }
         };
         tracing::info!(?shaders, "host pipeline");
+        let n = shaders.len() as u32;
+        crate::recent::note(crate::frame::current(), "pipeline", first_hash(shaders), n, 0, 0, 0);
         crate::host::name(&pso, || format!("{shaders:?}"));
         tracing::debug!(
             ?shaders,

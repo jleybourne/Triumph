@@ -107,6 +107,7 @@ pub fn run(
         return Ok(());
     }
     victory_loader::report_crashes();
+    victory_loader::crash::set_recent(victory_gpu::recent::dump);
     victory_loader::log_crashes_to(temp.with_file_name("crashes.log"));
     victory_hle::runtime::use_console_timers();
     #[cfg(feature = "diagnostics")]
