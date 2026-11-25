@@ -2944,6 +2944,36 @@ impl State {
         true
     }
 
+
+    /// Hands this draw's geometry to the world capture, if one is armed
+    /// (`crate::world_capture`).
+    fn capture(&self, p: &HostPipeline, indexed: bool) {
+        if !crate::world_capture::armed() {
+            return;
+        }
+        let views: Vec<(u64, u32, u32)> = self
+            .vertex
+            .iter()
+            .map(|v| (v.address, v.stride, v.size))
+            .collect();
+        let index = indexed.then(|| (self.index.address, self.index.format, self.index.size));
+        let inputs: Vec<(u32, u32, u32, bool)> = p
+            .inputs
+            .iter()
+            .map(|i| (i.slot, i.offset, i.format, i.per_instance))
+            .collect();
+        crate::world_capture::drawn(
+            self.pipeline,
+            &inputs,
+            &views,
+            index,
+            0,
+            0,
+            0,
+            self.topology,
+        );
+    }
+
     pub(crate) fn draw_indexed(
         &mut self,
         list: &HostList,
@@ -2964,6 +2994,9 @@ impl State {
         }
         let ran = !lost && self.prepare(list, true);
         if ran {
+            if let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) {
+                self.capture(p, true);
+            }
             #[cfg(feature = "diagnostics")]
             list.note_op(|| self.op_text(format!("indexed {indices}x{instances}"), false));
             // SAFETY: an open list with everything set.

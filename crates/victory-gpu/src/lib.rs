@@ -28,6 +28,7 @@ pub mod diagstream;
 mod draw;
 pub mod dxgi;
 pub mod recent;
+pub mod world_capture;
 pub mod render_scale;
 pub mod fence;
 pub mod frame;

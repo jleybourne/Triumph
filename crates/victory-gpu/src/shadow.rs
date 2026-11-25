@@ -2155,6 +2155,25 @@ impl Shadow {
     }
 
     /// The title memory the copy is of: its start and length.
+    /// A copy of `len` bytes of title memory at `at`, if this copy holds
+    /// them whole. For the world capture, which reads the geometry the
+    /// title drew from after the fact.
+    pub(crate) fn copy_out(&self, at: u64, len: usize) -> Option<Vec<u8>> {
+        let lo = at.max(self.start);
+        let hi = (at + len as u64).min(self.start + self.len);
+        if lo != at || hi != at + len as u64 {
+            return None;
+        }
+        let from = (at - self.start) as usize;
+        let mut out = vec![0u8; len];
+        // SAFETY: the range was checked against this copy's own bounds,
+        // and `data` is the mapped copy of exactly that range.
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.data.add(from), out.as_mut_ptr(), len);
+        }
+        Some(out)
+    }
+
     pub(crate) fn span(&self) -> (u64, u64) {
         (self.start, self.len)
     }
