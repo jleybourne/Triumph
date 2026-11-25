@@ -25,6 +25,18 @@ use crate::host::{HostList, host};
 use crate::watch::PAGE;
 
 /// A title buffer's host copy.
+/// Ranges smaller than this are copied whole: the write watch is not asked
+/// (`VICTORY_WATCH_MIN_BYTES`, default 64 KiB; 0 asks it every time).
+fn watch_floor() -> usize {
+    static ONCE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *ONCE.get_or_init(|| {
+        std::env::var("VICTORY_WATCH_MIN_BYTES")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(64 << 10)
+    })
+}
+
 pub(crate) struct Shadow {
     pub(crate) buffer: ID3D12Resource,
     data: *mut u8,
@@ -2983,6 +2995,16 @@ impl Shadow {
     /// [`Shadow::update`] of `[from, to)` (inside the buffer) where no
     /// shader writes.
     fn update_free(&self, from: usize, to: usize) -> usize {
+        // Below the floor the write watch costs more than the copy it saves:
+        // the world's copies average 18 KB (221 MB over 12,073 a frame), and
+        // asking the watch about each one is most of the preparing time. A
+        // whole copy is always correct, just larger.
+        if to - from < watch_floor() {
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::add(crate::copystat::C::WholeBytes, (to - from) as u64);
+            self.copy(from, to);
+            return to - from;
+        }
         if self.watched.load(Ordering::Relaxed) != NOT_WATCHED {
             if let Some((now, written)) = crate::watch::writes(from, to, true) {
                 self.watched.store(1, Ordering::Relaxed);
