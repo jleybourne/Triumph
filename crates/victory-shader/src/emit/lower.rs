@@ -1322,6 +1322,13 @@ impl<'a> Lower<'a> {
                                     need(b);
                                 }
                             }
+                            // `VICTORY_LDS_SPLIT=1`: split anyway, taking those barriers as
+                            // what orders the two halves. A program whose read and write meet
+                            // in one lane-branch region is otherwise kept whole, which a
+                            // 32-lane card refuses outright.
+                            if std::env::var_os("VICTORY_LDS_SPLIT").is_some_and(|v| v == "1") {
+                                lds_ok = true;
+                            }
                         }
                         if lds_ok {
                             wave = 32;
