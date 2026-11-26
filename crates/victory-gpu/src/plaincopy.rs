@@ -71,6 +71,15 @@ pub(crate) fn on() -> bool {
     })
 }
 
+/// Whether runs of adjacent copies are joined into one guarded copy per span
+/// (`VICTORY_COPY_MERGE=1`; off by default). Measured on the world scene: the
+/// frame's copies are one per distinct buffer, not adjacent spans, so joining
+/// them left the count unchanged (11,336-11,795 against 11,542). Kept for the
+/// record; the per-copy guard cost is the thing to attack instead.
+pub(crate) fn merge() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_COPY_MERGE").is_some_and(|v| v == "1"))
+}
 /// Copies made in place, their bytes, the copies that met a page that was
 /// not there (and went to the kernel's copy), and the copies not tried in
 /// place because their source faulted lately ([`RECENT`]) or they were

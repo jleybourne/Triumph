@@ -44,24 +44,24 @@ These overlap into the 130–141 ms frame. Two facts organise everything below:
 
 ## What's working
 
-- **The world renders and is playable.** Full scene draws at 4,500–6,900 draws a frame.
-- **Shader coverage 25,586 / 25,694 = 99.58%.** The 108 refused programs are one shape and
+✅ **The world renders and is playable.** Full scene draws at 4,500–6,900 draws a frame.
+✅ **Shader coverage 25,586 / 25,694 = 99.58%.** The 108 refused programs are one shape and
   `VICTORY_WAVE_MASKED=1` runs them approximately.
-- **No crashes or device removals** in the runs measured here (0 faults across every run tonight).
-- **Load → world pipeline library** works: 2,495 pipelines loaded, **0 compiled** per run.
-- **Diagnostics are trustworthy now**: GPU-busy, per-copy counts, descriptor-sync timing, and a
+✅ **No crashes or device removals** in the runs measured here (0 faults across every run measured).
+✅ **Load → world pipeline library** works: 2,495 pipelines loaded, **0 compiled** per run.
+✅ **Diagnostics are trustworthy now**: GPU-busy, per-copy counts, descriptor-sync timing, and a
   per-program instruction census (1,433 programs × 26 instruction kinds).
 
 ## What isn't working
 
-| problem | measured cost | state |
-|---|---|---|
-| Per-copy overhead in host copies | **63 ms** of a 141 ms frame | understood, not yet fixed |
-| Copy-back throughput | 73.9 ms at 0.88 GB/s | fix written, **unmeasured** |
-| GPU per-draw cost | 90.8 ms total, ~19.8 µs/draw | analysed, fixes in progress |
-| 356 draws dropped per frame | 8% of the scene | caused by pipelines not ready |
-| The last 108 shaders | 0.42% of programs | exact fix in progress (per-lane model) |
-| Shadowed areas render black | — | upstream issue, untouched here |
+| | problem | measured cost | state |
+|---|---|---|---|
+| ❌ | Per-copy overhead in host copies | **63 ms** of a 141 ms frame | understood, fix measured as ineffective |
+| 🔄 | Copy-back throughput | 73.9 ms at 0.88 GB/s | fix wired in production, **unmeasured** |
+| 🔄 | GPU per-draw cost | 90.8 ms total, ~19.8 µs/draw | three dedup fixes written, **unmeasured** |
+| ⚠️ | 356 draws dropped per frame | 8% of the scene | caused by pipelines not ready |
+| 🔄 | The last 108 shaders | 0.42% of programs | exact fix in progress (per-lane model) |
+| ❌ | Shadowed areas render black | — | upstream issue, untouched here |
 
 ## Findings
 
@@ -86,26 +86,26 @@ These overlap into the 130–141 ms frame. Two facts organise everything below:
 
 | tried | result | verdict |
 |---|---|---|
-| Adopt upstream base + its measured switch set | 3.4 → 6.9 fps | **adopted** |
-| `VICTORY_HEAP_SYNC_TABLES=1` (narrower heap scan) | 6.0 fps / 167 ms | rejected — slower |
-| `VICTORY_MERGE_RUNS` (join contiguous copy ranges) | copy count unchanged | rejected |
-| `VICTORY_COPY_MERGE` (join runs of adjacent copies) | 11,336–11,795 vs 11,542 | rejected — not adjacent |
-| 960×540 internal (`VICTORY_DISPLAY_MODE`) | +4% | rejected — not fill-rate |
-| Identity-element shortcut for refused shaders | covers 0 of 108 (all are sum) | rejected — proven empty |
-| Per-lane divergence work as a frame-rate lever | caps out at 16.5% of instructions | deprioritised for speed, kept for coverage |
-| Zero-copy / resident heaps (study only) | the only route to 33 ms GPU-side | deferred, large |
+| Adopt upstream base + its measured switch set | 3.4 → 6.9 fps | ✅ **adopted** |
+| `VICTORY_HEAP_SYNC_TABLES=1` (narrower heap scan) | 6.0 fps / 167 ms | ❌ rejected — slower |
+| `VICTORY_MERGE_RUNS` (join contiguous copy ranges) | copy count unchanged | ❌ rejected |
+| `VICTORY_COPY_MERGE` (join runs of adjacent copies) | 11,336–11,795 vs 11,542 | ❌ rejected — not adjacent |
+| 960×540 internal (`VICTORY_DISPLAY_MODE`) | +4% | ❌ rejected — not fill-rate |
+| Identity-element shortcut for refused shaders | covers 0 of 108 (all are sum) | ❌ rejected — proven empty |
+| Per-lane divergence work as a frame-rate lever | caps out at 16.5% of instructions | ⚠️ deprioritised for speed, kept for coverage |
+| Zero-copy / resident heaps (study only) | the only route to 33 ms GPU-side | ⚠️ deferred, large |
 
 ## What we're working on
 
-1. **Copy-back span merge** — written and wired in the production path (gap ≤ 64 bytes, in-flight
+1. 🔄 **Copy-back span merge** — written and wired in the production path (gap ≤ 64 bytes, in-flight
    ranges fall back), **measurement pending**. Target: 73.9 ms → 20–30 ms.
-2. **Per-draw state dedup** — three switches: skip already-bound target/depth transitions, dedupe
+2. 🔄 **Per-draw state dedup** — three switches: skip already-bound target/depth transitions, dedupe
    repeated root-argument and descriptor-table sets, rebind vertex buffers only on change.
    Estimated 12–24 µs per draw against a ~19.8 µs budget. **Measurement pending.**
-3. **Exact translation of the last 108 shaders** (`VICTORY_EXEC_DATA`) — carry each lane's EXEC
+3. 🔄 **Exact translation of the last 108 shaders** (`VICTORY_EXEC_DATA`) — carry each lane's EXEC
    mask as data and if-convert the divergent region, so a reduction no longer needs lanes to be
    co-resident. Acceptance: a numeric test that matches hand-computed console results.
-4. **Double-buffering the host copies** — so frame N+1 prepares while frame N draws. Target:
+4. ⏳ **Double-buffering the host copies** — so frame N+1 prepares while frame N draws. Target:
    141 → ~95 ms (10.5 fps) with no GPU change.
 
 ## What we think we can achieve
@@ -114,10 +114,10 @@ Honest arithmetic from the measurements above, not optimism:
 
 | milestone | frame | fps | confidence |
 |---|---|---|---|
-| copy-back + per-draw dedup land and measure well | ~95–110 ms | **9–10.5** | high |
-| + double-buffering (perfect overlap) | ~85–95 ms | **10.5–12** | medium |
-| + deeper per-draw GPU work (state, tables, shaders) | ~55–65 ms | **15–18** | medium — the GPU must halve |
-| 30 fps | 33 ms | **30** | **low — needs the GPU's 90.8 ms to fall ~4×** |
+| copy-back + per-draw dedup land and measure well | ~95–110 ms | **9–10.5** | 🟢 high |
+| + double-buffering (perfect overlap) | ~85–95 ms | **10.5–12** | 🟡 medium |
+| + deeper per-draw GPU work (state, tables, shaders) | ~55–65 ms | **15–18** | 🟡 medium — the GPU must halve |
+| 30 fps | 33 ms | **30** | 🔴 **low — needs the GPU's 90.8 ms to fall ~4×** |
 
 **Timeframe, on one developer plus agent assistance:** the three host-side items (1, 2, 4) are days
 of work each and carry the frame to ~10–12 fps. The GPU per-draw reduction is 1–2 weeks of
