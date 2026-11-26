@@ -3,11 +3,18 @@
 <p align="center"><b>Running an Xbox Series title natively on Windows — and getting its world<br>
 from 3.4 frames a second to a number worth playing.</b></p>
 
-<p align="center">
-  🎮 <b>7.7 fps</b> &nbsp;·&nbsp; ⏱️ 130 ms a frame &nbsp;·&nbsp; 🧱 4,710 draws a frame
-  &nbsp;|&nbsp; 🧩 <b>25,586 / 25,694</b> shaders translate
-  &nbsp;|&nbsp; 🎯 target <b>30 fps</b> &nbsp;|&nbsp; 🟢 host work &nbsp; 🔴 GPU per-draw is the barrier
-</p>
+| | status | what it is | now | target |
+|:--:|:--|:--|:--|:--|
+| 🟢 | **Frame rate** | release build, world scene, 4,710 draws a frame | **7.7 fps** · 130 ms · 348 dropped | 30 fps |
+| 🟢 | **Shaders** | console RDNA2 programs translated to DXIL | **25,586 / 25,694** · 99.58% | 25,694 / 25,694 |
+| 🟢 | **Stability** | crashes and device removals across every run measured | **0** | 0 |
+| 🟢 | **Pipeline library** | pipelines loaded from disk instead of compiled | **2,495 loaded · 0 compiled** | unchanged |
+| 🔄 | **Copy-back** | shader writes returned to the title's memory | 73.9 ms · 64.7 MB · 0.88 GB/s | ≤ 20 ms |
+| 🔄 | **Per-draw GPU** | state work the layer issues for each draw | 90.8 ms · ~19.8 µs a draw | ≤ 20 ms total |
+| 🔄 | **The last 108 shaders** | one shape: a masked wave reduction | approximated by `VICTORY_WAVE_MASKED` | exact |
+| ⏳ | **Double-buffered copies** | frame N+1 prepared while frame N draws | 141 ms frame, card 64% busy | ~95 ms → 10.5 fps |
+| ⚠️ | **Dropped draws** | draws lost to pipelines still loading | 344–397 a frame (8% of scene) | 0 |
+| ❌ | **Shadowed areas** | parts of the picture that render black | upstream issue, untouched here | fixed |
 
 | mark | means | mark | means |
 |:--:|:--|:--:|:--|
