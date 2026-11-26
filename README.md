@@ -23,12 +23,14 @@ and the work of getting its world to 30 frames a second.</b></p>
     <td align="center"><a href="docs/research/README.md"><b>🔬 Research</b></a><br><sub>the path to 30, 60 and 120</sub></td>
     <td align="center"><a href="docs/design/README.md"><b>📐 Designs</b></a><br><sub>plans for the big changes</sub></td>
     <td align="center"><a href="docs/runs.md"><b>📊 Every run</b></a><br><sub>including the rejected ones</sub></td>
+    <td align="center"><a href="docs/tooling.md"><b>🧰 Tooling</b></a><br><sub>how we measure and debug</sub></td>
+    <td align="center"><a href="docs/credits.md"><b>🙏 Credits</b></a><br><sub>code we used, and who wrote it</sub></td>
   </tr>
 </table>
 
 ---
 
-Triumph is a fork of [VIctory](https://github.com/Marvisak/VIctory), a compatibility layer that runs
+Triumph is a fork of VIctory (Marvisak), a compatibility layer that runs
 an Xbox Series title's own x86-64 code on Windows and supplies everything underneath it: the console's
 system calls, its memory model, and its GPU, translated to Direct3D 12. This fork has one job: **make
 the 3D world playable on one specific PC without losing picture or correctness.**
@@ -144,18 +146,23 @@ The full list is in upstream's README.
 | 📐 | [Designs](docs/design/README.md) | zero-copy memory, DLSS, per-lane translation, debug menu |
 | 📊 | [Runs](docs/runs.md) | every measured run, including the rejected ones and why |
 | ⚙️ | [Settings](docs/settings.md) | the title's own settings file and what each change measured |
+| 🧰 | [Tooling](docs/tooling.md) | the tools and scripts we measure with, and what each found |
+| 🙏 | [Credits](docs/credits.md) | every project we used or learned from, and what came from each |
 | 🤝 | [CLAUDE.md](CLAUDE.md) | the working handoff: measured state, blockers, rules |
 
 ## 🙏 Credits
 
-- **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak and contributors is the base of
+The full list, with what came from each project: **[credits](docs/credits.md)**.
+
+
+- **VIctory (Marvisak)** by Marvisak and contributors is the base of
   everything here: loader, runtime services, the Direct3D 12 back end, the shader recompiler.
-- **[XCL](https://github.com/ivall/xcl)** by ivall and contributors is a design reference: its unified
-  memory and wave64-on-wave32 designs. XCL is GPL-2.0-only and this fork is GPL-3.0, so its ideas
+- **the X reference layer** (ivall) by ivall and contributors is a design reference: its unified
+  memory and wave64-on-wave32 designs. the X reference layer is GPL-2.0-only and this fork is GPL-3.0, so its ideas
   are reimplemented here, never copied.
-- **cool_fox** (carlm125 and contributors) for its documented cost structure and the decoder fix from
+- **the RDNA3 reference fork** and its contributors for its documented cost structure and the decoder fix from
   its PR #6 (Yoshi-233, after davutsimsekk / Belobug).
-- The guard over every view of a memory page is by **myokex** (victory-amd `c6dc4d8`), adapting
+- The guard over every view of a memory page is by **myokex** (an AMD memory fork, `c6dc4d8`), adapting
   pull request #115 by Spexivus, its correction by joroyt and part of VIctory #1122 by tightfall. The
   read-beside fix for kernel reads is by **Joshua Odom** (`10ea38e`).
 - Developed with [Claude Code](https://claude.com/claude-code) and Hermes Agent. Figures on this page

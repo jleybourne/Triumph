@@ -1,8 +1,8 @@
 # UMA: title graphics memory the card uses directly
 
 Design only; nothing here is built or measured. Tree read: `wt-bisect` (`b28414fc`, branch
-`pipeline-samplers`). Reference read (ideas only, GPL-2.0-only, no code taken): xcl
-`crates/xcl/src/gpu/uma.rs`, `crates/xcl/src/hle/d3d12x/sparse.rs`.
+`pipeline-samplers`). Reference read (ideas only, GPL-2.0-only, no code taken): the X reference layer
+`gpu/uma.rs`, `hle/d3d12x/sparse.rs`.
 
 ## 1. What the numbers say, and what they imply
 
@@ -25,9 +25,9 @@ Two facts decide the design:
    reads from the PC per frame is ~8 ms of card time. Opened heaps (`inplace.rs` header) are always
    custom heaps in the PC's memory (pool L0), so "in place" always means "over the bus".
 
-Hence xcl's split, adapted: **coherent system-memory tier** for what the CPU writes every frame or
+Hence the X reference layer's split, adapted: **coherent system-memory tier** for what the CPU writes every frame or
 reads, **card tier** for what the GPU reads heavily or writes, and **no copy-back** except for a
-short, known list. xcl does exactly this: its sparse VRAM windows upload CPU-changed 64-byte chunks
+short, known list. the X reference layer does exactly this: its sparse VRAM windows upload CPU-changed 64-byte chunks
 and copy back only command-processor writes and explicit `Map` reads; its committed coherent window
 holds draw arguments and readback buffers.
 
@@ -82,7 +82,7 @@ Card room: 12 GB with 2.2-3.1 GB of render targets plus textures; C keeps the ex
 
 **Region table** (new, victory-gpu `uma.rs`, our own design): `BTreeMap<title_va, Region>` where a
 Region is `{start, len, heap, buffer (≤ 4 GiB - 64 KiB), gpu_base, tier, section/offset}`. A page-pool
-section larger than 4 GiB - 64 KiB (exactly 4 GiB is refused, xcl measured) gets overlapping placed
+section larger than 4 GiB - 64 KiB (exactly 4 GiB is refused, the X reference layer measured) gets overlapping placed
 buffers every 2 GiB so any binding ≤ 2 GiB fits one. Filled from map/unmap notifications.
 
 - **Root descriptors, VB/IB views, indirect args** (`draw.rs` `root_view`, the VB/IB/indirect paths in
@@ -94,13 +94,13 @@ buffers every 2 GiB so any binding ≤ 2 GiB fits one. Filled from map/unmap not
   < 4 GiB (DXIL raw offsets are 32-bit), which the 4 GiB buffer cap guarantees.
 - **Raw shader addresses** (`resource::MEMORY`: `global_*`/`s_load` on computed pointers; BVH builder
   and walkers): keep the existing 64 KiB page directory (`emit/shader.rs` `SLOT_MEMORY`,
-  `MEMORY_PAGES = 2^21`, lowered in `emit/lower.rs` `fn memory`). Unlike xcl's window-index-plus-offset
+  `MEMORY_PAGES = 2^21`, lowered in `emit/lower.rs` `fn memory`). Unlike the X reference layer's window-index-plus-offset
   arithmetic, a per-page table survives page-pool aliasing (scattered physical pages), and it is
   already in the translator. Change only who fills it: `memory.rs` writes directory entries from the
   region table at map time (copy number = the Region's raw view slot, start = page's byte in that
   buffer) instead of on faults, and stops "bring every numbered copy up to date and declare all
   written" per dispatch (`memory::ready`). No shader change; the fault path stays as a safety net.
-  Optional later: a 4 GiB-window fast path (xcl-style `(hi - base_hi, lo)`) for private-memory
+  Optional later: a 4 GiB-window fast path (the X reference layer-style `(hi - base_hi, lo)`) for private-memory
   regions only, if the directory load shows up in the card profile.
 
 ## 5. GPU→CPU visibility without copy-back
@@ -115,12 +115,12 @@ buffers every 2 GiB so any binding ≤ 2 GiB fits one. Filled from map/unmap not
      is title memory the CPU may poll: route their destination to S instead (cheapest: CP writes are
      tiny);
   3. resources the title `Map`s for read: on `Map` with a read range, copy that range back once
-     (xcl's `readback_now` idea);
+     (the X reference layer's `readback_now` idea);
   4. an allowlist `VICTORY_UMA_BACK_KEEP=<start-len,...>` and buffers the census flagged as
      touched-by-other.
 - **Stale CPU view hazard.** With no copy-back, title memory under C buffers is older than the card.
   When the title later writes part of such a page, today's refresh would send the whole 64 KiB page and
-  overwrite GPU-written bytes. Rule (xcl does the same): per C page keep 64-byte chunk hashes of what
+  overwrite GPU-written bytes. Rule (the X reference layer does the same): per C page keep 64-byte chunk hashes of what
   was last *sent*; a refresh sends only chunks whose title bytes differ from that hash. Memory cost:
   8 B per 64 B (1/8 of C bytes). Reuse `shadow.rs` `changed_chunks` / `changed_runs`; the hashes
   replace the `before`/`kept` snapshots.

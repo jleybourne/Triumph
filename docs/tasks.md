@@ -18,7 +18,7 @@ was measured inside one run (`alt` switches, which flip on and off every 20 s).
 | ✅ | **`fsrQuality=4` black screen** | Fixed by the same change, since its passes were among the refused pipelines. It renders now but measures no gain yet (the GPU isn't the wall). | run 27 · capture `fsr4-fixed-211141.png` |
 | ✅ | **Shader census** | 25,636 of 25,694 programs emit DXIL (99.77 %). The 58 left, by reason: 40 descriptor chosen by control flow, 10 hardware SGPR input, 5 descriptor read as data, 3 lane masks. | `victory translate` over the full archive |
 | ✅ | **Wave64 on 32-lane cards (part 1)** | 1 of the 7 refused wave64 shaders now runs at wave32 (pipeline created on the card). The other 6 need lanes to meet inside branches. | `wave64-split` `ace7a91f`, 221 shader tests pass |
-| ✅ | **Decoder fix from cool_fox PR #6** | Operandless VOP1 and the EXEC destination of VOP3 CMPX are decoded (ported with credit). | `wave64-split` `3edc3e67` |
+| ✅ | **Decoder fix from the RDNA3 reference fork PR #6** | Operandless VOP1 and the EXEC destination of VOP3 CMPX are decoded (ported with credit). | `wave64-split` `3edc3e67` |
 | ✅ | **AVX2 build (`target-cpu=native`)** | 7.9 fps · 127.0 ms · 4,839 draws against 7.3 · 136.6 · 4,706. Within run-to-run variance, so not yet proven. | run A |
 | ✅ | **Copy-back piece cut underflow** | Found by a new test: a copy starting mid-piece could skip a thread's range in release builds. Fixed. | `fast-integ` `c8318f37` |
 | ✅ | **Test suite builds again** | One wrong module path had kept `victory-gpu`'s tests from compiling. Four tests in untouched files fail and are noted. | `c8318f37` |

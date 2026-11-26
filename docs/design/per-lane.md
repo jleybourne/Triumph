@@ -27,7 +27,7 @@ Read-only study. Nothing was built or run. Every file/line below was read in
 - `VICTORY_WAVE_MASKED` (named in the doc) does not exist in the tree; grep finds only
   `VICTORY_WAVE_WIDE`, `_LOCAL`, `_OWN_BITS`, `_DEEP_SKIPS`, `_WHY`, `VICTORY_FIRSTLANE_OWN`.
 
-The 4-8x line traces to `D:\victory-work\perlane-design.md`, a summary of the *xcl* tree's
+The 4-8x line traces to `D:\victory-work\perlane-design.md`, a summary of the *the X reference layer* tree's
 "naive path" ("current naive path executes every lane through every branch path (4-8x
 inflation)"), copied into this tree's doc. No measurement of it exists here.
 

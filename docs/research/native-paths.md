@@ -1,7 +1,7 @@
 # Native paths: what could bypass emulation instead of speeding it up
 
 Read-only research, 2026-11-26. Tree: `D:\victory-work\wt-bisect`. Legend: **[V]** verified by me on disk this session,
-**[M]** measured figure quoted from CLAUDE.md or docs (not re-measured), **[X]** read in xcl/cool-fox docs (their claim),
+**[M]** measured figure quoted from CLAUDE.md or docs (not re-measured), **[X]** read in the X reference layer/the RDNA3 reference fork docs (their claim),
 **[E]** my estimate, with reasoning. Nothing was run, built or edited.
 
 ## What I verified on disk
@@ -10,7 +10,7 @@ Read-only research, 2026-11-26. Tree: `D:\victory-work\wt-bisect`. Legend: **[V]
   has `d3d12_xs.dll`, `xg_xs.dll`, `xcrdapi.dll`, `xapu.dll`, `chad.dll`, `acphal.dll`, `xboxbvhbuilder.dll`,
   `bink2scarlett.dll`, `amd_fidelityfx_loader_xbox.dll`, `libhttpclient.gdk.dll`, `mfreadwrite.dll`. No PC graphics entry
   (`D3D12CreateDevice`, `dxcompiler`, Vulkan) appears; `D3D12XboxCreateDevice` does. There is no PC build to borrow from.
-- **[V]** `shaders.rpf` is 393 MB. xcl's design doc **[X]** says its containers carry a DXIL part whose bitcode is
+- **[V]** `shaders.rpf` is 393 MB. the X reference layer's design doc **[X]** says its containers carry a DXIL part whose bitcode is
   replaced by a 4-byte `NOBC` marker (reflection and signatures only), next to an `FSSM` blob of RDNA2 machine code.
   Our `victory-shader/src/dxil.rs` rejects a part without LLVM bitcode magic, consistent with that. I did not open the
   archive myself, so the stripped-bitcode point is **[X]**.
@@ -20,26 +20,26 @@ Read-only research, 2026-11-26. Tree: `D:\victory-work\wt-bisect`. Legend: **[V]
   build inputs (`D3D12_RAYTRACING_GEOMETRY_DESC.*`, instance-desc alignment) plus an Xbox "DEHYDRATED" build flag. Its input
   is DXR-shaped; its output is the console node format.
 - **[V]** `Bink2Scarlett.dll` exports the public Bink API (`BinkOpen`, `BinkDoFrame`, `BinkCopyToBuffer`, `BinkGPU`...).
-  It is the title's own x64 code, so it already runs natively; xcl **[X]** says the GPU-assisted mode is not used.
+  It is the title's own x64 code, so it already runs natively; the X reference layer **[X]** says the GPU-assisted mode is not used.
 - **[V]** `victory-game::KNOWN_BUILDS` is empty and `docs/architecture.md` lists no title-code hooks: **we have no
   code-patching infrastructure for the title today.** Allowed by policy: per-build offsets and byte signatures.
 - **[V]** `texture.rs` header: detiling applies only to "texture contents the title writes itself" (streamed pages,
   layout-library copies, movie frames, atlases). Render targets and GPU-written textures are already host resources.
 - **[V]** `victory-shader` already has its own DXIL bitcode/container emitter (`emit/bitcode.rs`, `container.rs`,
-  `validator.rs`). The thing xcl's direct-DXIL spec delivers (no HLSL, no DXC at runtime) is already ours.
+  `validator.rs`). The thing the X reference layer's direct-DXIL spec delivers (no HLSL, no DXC at runtime) is already ours.
 
 ## The seven questions
 
 ### (1) Hooking the title's renderer above the console command list
 - **What it removes [M]:** list recording is 36,701 calls / 231 ms, but spread over the title's workers and **0.0 ms on the
   render thread**. The wall is memory mirroring (submit thread 74 ms). So even a perfect bypass of per-call translation
-  buys little wall time. **[E]** 0-7 ms (THIN's measured effect in cool-fox was 75 -> 68 ms **[X]**, other machine).
+  buys little wall time. **[E]** 0-7 ms (THIN's measured effect in the RDNA3 reference fork was 75 -> 68 ms **[X]**, other machine).
 - **Feasibility: low.** Our translated shaders expect console root layouts, raw 40-bit addresses and descriptors written by
   the title. To issue "native D3D12 above the list" you must understand the engine's draw-item and descriptor
   abstractions and re-implement them: a renderer rewrite behind byte signatures that break on any title update, on a
   binary we have no symbols for. Effort: months. Risk: high (correctness, version fragility).
-- **How others do it:** xcl and cool-fox both wrap D3D12.X faithfully at the vtable and make the wrapper cheaper (xcl:
-  UMA, direct DXIL; cool-fox: THIN, descriptors left to draws, parallel hashing). Neither hooks the title's renderer **[X]**
+- **How others do it:** the X reference layer and the RDNA3 reference fork both wrap D3D12.X faithfully at the vtable and make the wrapper cheaper (the X reference layer:
+  UMA, direct DXIL; the RDNA3 reference fork: THIN, descriptors left to draws, parallel hashing). Neither hooks the title's renderer **[X]**
   (I read their docs and our architecture, not every source file).
 - **What is feasible instead:** hook at **DLL seams**, which have named, stable exports: the FFX loader (item 6), the BVH
   builder (item 4), Bink, XG. These need no title-code patching.
@@ -55,9 +55,9 @@ Read-only research, 2026-11-26. Tree: `D:\victory-work\wt-bisect`. Legend: **[V]
 - **Textures GPU-only: already native [V].** Remaining cost is title-written textures: `textures` 6 ms steady **[M]**,
   but hundreds of ms/frame while streaming **[M, texture-load notes: unverified agent write-up]**.
 - **Option A, GPU detile:** upload the console-tiled bytes raw and detile in a compute shader (the GFX10 swizzle is a GF(2)
-  XOR table: offset = ox[x]^oy[y]^oz[z] in xcl's `tiling.rs` **[X]**, so a table-driven shader is simple). Removes the CPU
+  XOR table: offset = ox[x]^oy[y]^oz[z] in the X reference layer's `tiling.rs` **[X]**, so a table-driven shader is simple). Removes the CPU
   detile and staging copy: **[E]** ~4-6 ms steady CPU, more in streaming. Effort days-1 week. Risk low-medium
-  (3 of 912 retail volume LUTs did not match exactly in xcl **[X]**).
+  (3 of 912 retail volume LUTs did not match exactly in the X reference layer **[X]**).
 - **Option B, decode BCPack straight into a host-side upload, skipping console memory:** only if the DStorage
   destination is known to be GPU-only. The title can also CPU-read textures (ocean displacement, physics sampling,
   `texback.rs`), so you need an allow-list. Effort weeks; risk medium.
@@ -94,14 +94,14 @@ The cleanest seam anywhere: replace the loader's five exports with HLE functions
 calls device method 0x218 and measures 0.115 ms/draw vs 0.029) is never entered. `design/dlss.md` already designs this
 (option A). Needs a PC upscaler binary the user does not hold (see legal note).
 
-### (7) xcl features that bypass a layer we still have
-- Direct DXIL (spec `2026-11-24-direct-dxil.md`, in git history, not the working tree): **already ours** (`emit/`). xcl's
+### (7) the X reference layer features that bypass a layer we still have
+- Direct DXIL (spec `2026-11-24-direct-dxil.md`, in git history, not the working tree): **already ours** (`emit/`). the X reference layer's
   sweep **[X]**: 197 of 200 sampled programs translate, DXIL 1.27x larger than HLSL+DXC, p50 64 ms.
 - UMA windows (`gpu/uma.rs`): not ours yet (our `inplace.rs` places only contiguous runs; 0 regions placed because the title's
-  heap is mapped page by page, blocker 3). xcl's window scheme (up to 4 windows at 4 GiB strides, shader address
+  heap is mapped page by page, blocker 3). the X reference layer's window scheme (up to 4 windows at 4 GiB strides, shader address
   translation) targets the same copies; caveat above on PCIe 3.0.
 - GFX10 tiling tables, BCPack, DStorage: we have equivalents (`victory-formats`, `dstorage.rs`).
-- Nothing else in xcl bypasses an emulation layer; its docs record Bink GPU mode and BCPack hardware swizzle as unsupported.
+- Nothing else in the X reference layer bypasses an emulation layer; its docs record Bink GPU mode and BCPack hardware swizzle as unsupported.
 
 ## Ranking (ms removed x confidence / effort)
 
@@ -110,7 +110,7 @@ calls device method 0x218 and measures 0.115 ms/draw vs 0.029) is never entered.
 | 1 | VRAM-authoritative buffers, read-back allow-list (3C, UMA variant) | up to ~65 ms thread + ~26 ms card | weeks | high | [M] costs, [E] gain |
 | 2 | Intercept FFX loader, PC upscaler (6) | [E] 2-5 ms card, unblocks 0x218 | days | low-med; needs binary user lacks | [E] |
 | 3 | GPU detile compute (3A) | [E] 4-6 ms steady, more streaming | days-week | low-med | [M] 6 ms |
-| 4 | Finish THIN (not a bypass, from cool-fox) | [E] 0-7 ms | days-weeks | med | [X] |
+| 4 | Finish THIN (not a bypass, from the RDNA3 reference fork) | [E] 0-7 ms | days-weeks | med | [X] |
 | 5 | BCPack-direct-to-host (3B) | streaming stalls | weeks | med | [E] |
 | 6 | GDeflate transcode (5) | load time only | weeks | low | [E] |
 | 7 | Hook title renderer (1) | 0-7 ms wall | months | high | [E] |

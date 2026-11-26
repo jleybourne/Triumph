@@ -31,4 +31,4 @@ flowchart TD
 ```
 
 Licensing notes are in each design. In particular, DLSS is a closed SDK and this repository is
-GPL-3.0, so how it ships is the owner's decision. xcl (GPL-2.0-only) is read for ideas only, never copied.
+GPL-3.0, so how it ships is the owner's decision. The X reference layer (GPL-2.0-only) is read for ideas only, never copied.

@@ -1,14 +1,14 @@
 # DLSS Super Resolution in place of the title's FSR: design
 
 Status: design only, nothing built or measured. Items marked VERIFY are inferences from the
-FidelityFX API shape and xcl's notes, not things read from our own logs.
+FidelityFX API shape and the X reference layer's notes, not things read from our own logs.
 
 ## 0. What we know
 
 - The title imports `amd_fidelityfx_loader_xbox.dll`; our loader maps it as a title DLL
   (`apps/victory/src/run.rs:76`) and binds its imports ("4 hle, 18 host"). Those are the DLL's
   imports, not its exports.
-- xcl's notes (`gpu/recomp/pso.rs`, `hle/d3d12x/*`) say the console upscaler is a second DLL,
+- the X reference layer's notes (`gpu/recomp/pso.rs`, `hle/d3d12x/*`) say the console upscaler is a second DLL,
   `amd_fidelityfx_upscaler_xbox.dll` (FSR4), which the loader front-ends. The upscaler builds its
   passes from console containers (an `ACCC` part holding `FSPX`: RDNA2 code, no DXIL) through
   device method 0x218 (`unknown_pipeline::<0x218>`, `crates/victory-gpu/src/device.rs:441`; the real
@@ -172,7 +172,7 @@ the driver. Options:
 3. **Ship the closed plugin with the GPL core in one package.** Highest risk (aggregation vs
    combined work); do not do this without a lawyer.
 4. **Relicense or add a linking exception** for the NVIDIA module (as some GPL projects do for
-   OpenSSL). Needs agreement of all copyright holders, and since upstream forks (xcl is GPL-2.0-only)
+   OpenSSL). Needs agreement of all copyright holders, and since upstream forks (the X reference layer is GPL-2.0-only)
    have contributed ideas only, that matters mainly for any copied code (none per CLAUDE.md).
 5. **Do not ship DLSS**; offer only vendor-neutral upscaling.
 
