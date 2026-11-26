@@ -15,11 +15,11 @@ table is an intention: if a number is there, it came from a run whose log is nam
 page.
 | | status | what it is | now | target |
 |:--:|:--|:--|:--|:--|
-| 🟢 | **Frame rate** | world scene, ~4,500 draws a frame | **8.0 fps** · 125 ms · 348 dropped (was 6.9 fps · 145.9 ms) | 30 fps |
+| 🟢 | **Frame rate** | world scene, ~4,500 draws a frame | **7.6 fps median · 8.5 fps best** · 131 ms median / 117.5 best · 348 dropped (was 6.9 · 145.9) | 30 fps |
 | 🟢 | **Shaders** | console RDNA2 programs translated to DXIL | **25,586 / 25,694** · 99.58% | 25,694 / 25,694 |
 | 🟢 | **Stability** | crashes and device removals across every run measured | **0** | 0 |
 | 🟢 | **Pipeline library** | pipelines loaded from disk instead of compiled | **2,495 loaded · 0 compiled** | unchanged |
-| 🔄 | **Copy-back** | shader writes returned to the title's memory | 73.9 ms · 64.7 MB · 0.88 GB/s | ≤ 20 ms |
+| 🔄 | **Copy-back** | shader writes returned to the title's memory | **49.3 ms · 58.5 MB** (was 73.9 · 64.7) | ≤ 20 ms |
 | 🔄 | **Per-draw GPU** | state work the layer issues for each draw | 90.8 ms · ~19.8 µs a draw | ≤ 20 ms total |
 | 🔄 | **The last 108 shaders** | one shape: a masked wave reduction | approximated by `VICTORY_WAVE_MASKED` | exact |
 | ⏳ | **Double-buffered copies** | frame N+1 prepared while frame N draws | 141 ms frame, card 64% busy | ~95 ms → 10.5 fps |
