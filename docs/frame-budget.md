@@ -67,3 +67,26 @@ that reason, and the run that matters is the one whose frame line reads a full d
 A measurement rule that follows: when a frame line carries a draw count and a dropped count,
 compare the pair, never the frame rate alone. A frame that drops draws is not a faster frame,
 it is a smaller one.
+
+## The first full-scene measurement (600 s run)
+
+A 300-second run is too short: the world spends its first minutes in pipeline loads, and the frames
+it prints then are either tiny scenes (744 draws) or stalls (2,975 ms). A 600-second run settles:
+
+| frames (draws >= 1,200) | draws | fps | ms | dropped |
+|---|---|---|---|---|
+| best | 4,525 | 6.9 | 145.9 | 356 |
+| | 4,501 | 6.7 | 149.2 | 298 |
+| | 4,839 | 6.7 | 149.2 | 347 |
+| | 4,717 | 6.6 | 152.2 | 296 |
+| max seen | 6,550 | | | |
+
+Against the older tree at a comparable scene this is a real gain, per draw even more than per frame:
+
+| tree | draws | ms | fps | ms per draw |
+|---|---|---|---|---|
+| older tree (c76e330) | 5,801 | 295 | 3.4 | 0.051 |
+| upstream (006c3530) + switch set | 4,525 | 146 | 6.9 | 0.032 |
+
+**6.9 fps at 4,525 draws, 146 ms, with 356 draws still dropped.** That is the honest baseline: the
+full scene, after the pipeline loads, on this machine.
