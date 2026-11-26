@@ -68,6 +68,7 @@ A measurement rule that follows: when a frame line carries a draw count and a dr
 compare the pair, never the frame rate alone. A frame that drops draws is not a faster frame,
 it is a smaller one.
 
+<<<<<<< Updated upstream
 ## The first full-scene measurement (600 s run)
 
 A 300-second run is too short: the world spends its first minutes in pipeline loads, and the frames
@@ -90,3 +91,40 @@ Against the older tree at a comparable scene this is a real gain, per draw even 
 
 **6.9 fps at 4,525 draws, 146 ms, with 356 draws still dropped.** That is the honest baseline: the
 full scene, after the pipeline loads, on this machine.
+=======
+## The GPU is busy, the copies are overhead-bound, and release is the honest build
+
+Measured after the upstream merge settled (600 s runs, frames at 1,200+ draws only).
+
+| run | draws | fps | ms | dropped |
+|---|---|---|---|---|
+| diagnostics build, standard switch set | 4,525 | 6.9 | 145.9 | 356 |
+| release build, same switches | 4,710 | **7.7** | **130.0** | 348 |
+| diagnostics, 960x540 internal | 4,579 | 7.3 | 140.9 | 344 |
+
+So diagnostics costs about 16 ms of the frame (11%), and **quartering the resolution saves only 4%**:
+the card is not fill-rate bound. The card-clock figure says why -- `GPU busy 90.8 ms` of a 140.9 ms
+frame. Two thirds of the frame is the card, and it scales with draws (about 20 us per draw), not with
+pixels.
+
+## The copy path is overhead-bound, not bandwidth-bound
+
+| movement | bytes | time | rate |
+|---|---|---|---|
+| copies into host memory | 114.9 MB in 11,542 copies | 75.4 ms | 1.52 GB/s |
+| copy-back to title memory | 64.7 MB | 73.9 ms | 0.88 GB/s |
+
+11,542 copies average 10.2 KB and cost 6.53 us each; 10.2 KB at 10 GB/s is 1.04 us. **About 5.5 us
+per copy is overhead -- 63 ms a frame.** Joining contiguous spans and keeping the per-copy timing out
+of release is the work that follows from this, and it is why byte-level optimisations changed nothing:
+the cost is per operation, not per byte.
+
+## What has been measured and rejected, so nobody repeats it
+
+- `VICTORY_HEAP_SYNC_TABLES=1`: slower (6.0 fps / 167 ms). The full heap scan is not the bottleneck.
+- `VICTORY_MERGE_RUNS` (joining contiguous copy ranges): no change in the copy count.
+- Rendering at 960x540: 4% faster only, at a quarter of the pixels.
+- Per-lane divergence work: the census says the kinds it removes are 16.5% of instructions and
+  `guard_select` specifically is 0.64%, while `arith` is 44.6% and provably 0% redundant.
+- Descriptor heap syncing: it costs 16.7 ms median, not the 75 ms the copies cost.
+>>>>>>> Stashed changes
