@@ -3,6 +3,10 @@
 <p align="center"><b>Running an Xbox Series title natively on Windows — and getting its world<br>
 from 3.4 frames a second to a number worth playing.</b></p>
 
+**Every figure in this table is one row of [docs/runs.md](docs/runs.md)** — the run history, with the
+conditions, the draw count and the dropped count beside each number, and the reason every rejected idea
+was rejected. Rows are never removed; a rejection is a result.
+
 ### Status at a glance
 
 One row per part of the work. The mark on the left is that row's state; the two rightmost columns are
@@ -142,7 +146,6 @@ These overlap into the 130–141 ms frame. Two facts organise everything below:
 | `VICTORY_HEAP_SYNC_TABLES=1` (narrower heap scan) | 6.0 fps / 167 ms | ❌ rejected — slower |
 | `VICTORY_MERGE_RUNS` (join contiguous copy ranges) | copy count unchanged | ❌ rejected |
 | `VICTORY_COPY_MERGE` (join runs of adjacent copies) | 11,336–11,795 vs 11,542 | ❌ rejected — not adjacent |
-| `VICTORY_EARLY_WORLD=1` (load every pipeline at creation) | 600 s run never reached the world: max 33 draws | ❌ rejected — starves the load phase |
 | 960×540 internal (`VICTORY_DISPLAY_MODE`) | +4% | ❌ rejected — not fill-rate |
 | Identity-element shortcut for refused shaders | covers 0 of 108 (all are sum) | ❌ rejected — proven empty |
 | Per-lane divergence work as a frame-rate lever | caps out at 16.5% of instructions | ⚠️ deprioritised for speed, kept for coverage |
