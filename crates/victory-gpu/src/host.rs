@@ -8165,6 +8165,8 @@ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: b
     if len == 0 {
         return;
     }
+    // VICTORY_COPY_MERGE enables coalescing in plaincopy for adjacent ranges in the frame's copy list
+    let _ = crate::plaincopy::merge();
     #[cfg(feature = "diagnostics")]
     {
         crate::backreads::touched(src as usize, len, false);

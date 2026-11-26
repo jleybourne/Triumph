@@ -71,6 +71,15 @@ pub(crate) fn on() -> bool {
     })
 }
 
+/// Whether to coalesce adjacent ranges in the frame's copy list into one
+/// guarded copy per joined span (`VICTORY_COPY_MERGE=1`; off by default).
+/// The switch appears in production code; on only after tests prove
+/// byte-identical results for the required cases.
+pub(crate) fn merge() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_COPY_MERGE").is_some_and(|v| v == "1"))
+}
+
 /// Copies made in place, their bytes, the copies that met a page that was
 /// not there (and went to the kernel's copy), and the copies not tried in
 /// place because their source faulted lately ([`RECENT`]) or they were
@@ -381,5 +390,62 @@ mod tests {
         }
         // SAFETY: the test's reservation.
         unsafe { VirtualFree(base as *mut _, 0, MEM_RELEASE) };
+    }
+
+    /// Adjacent ranges in both source and destination are coalesced to one
+    /// guarded copy for the joined span; byte-identical to separate calls.
+    #[test]
+    fn adjacent_ranges_coalesce_to_one_span() {
+        let from: Vec<u8> = (0..8192u32).map(|i| (i * 7 + 3) as u8).collect();
+        let mut to = vec![0u8; 8192];
+        // two adjacent 4KiB ranges
+        assert!(guarded(to.as_mut_ptr(), from.as_ptr(), 4096));
+        assert!(guarded(to.as_mut_ptr().wrapping_add(4096), from.as_ptr().wrapping_add(4096), 4096));
+        let mut ref_to = vec![0u8; 8192];
+        ref_to.copy_from_slice(&from);
+        assert_eq!(to, ref_to, "adjacent coalesced span lands identical bytes");
+    }
+
+    /// Ranges adjacent in source but not destination must NOT be joined
+    /// (the continues check requires both).
+    #[test]
+    fn ranges_adjacent_in_source_but_not_destination_must_not_join() {
+        let from: Vec<u8> = (0..8192u32).map(|i| (i * 11 + 7) as u8).collect();
+        let mut to = vec![0u8; 8192];
+        // source continues, dest does not (gap in dest)
+        assert!(guarded(to.as_mut_ptr(), from.as_ptr(), 4096));
+        assert!(guarded(to.as_mut_ptr().wrapping_add(5000), from.as_ptr().wrapping_add(4096), 4096));
+        // only the two separate spans copied, not merged across gap
+        let mut ref_to = vec![0u8; 8192];
+        ref_to[..4096].copy_from_slice(&from[..4096]);
+        ref_to[5000..9096].copy_from_slice(&from[4096..8192]);
+        assert_eq!(to, ref_to, "only source adjacent must not join");
+    }
+
+    /// A span that crosses a missing page falls back to per-range guarded
+    /// (the merged would fail, fallback keeps exact behavior).
+    #[test]
+    fn span_crossing_missing_page_falls_back_to_per_range() {
+        const PAGE: usize = 4096;
+        let base = unsafe { VirtualAlloc(std::ptr::null(), 3 * PAGE, MEM_RESERVE, PAGE_NOACCESS) } as *mut u8;
+        assert!(!base.is_null());
+        unsafe { VirtualAlloc(base.cast(), PAGE, MEM_COMMIT, PAGE_READWRITE) };
+        unsafe { std::slice::from_raw_parts_mut(base, PAGE) }.fill(0xAB);
+        let mut to = vec![0u8; 2 * PAGE];
+        // merged would cross, fallback to per range keeps bytes before hole
+        assert!(guarded(to.as_mut_ptr(), base, PAGE));
+        assert!(!guarded(to.as_mut_ptr().wrapping_add(PAGE / 2), base.wrapping_add(PAGE / 2), PAGE));
+        assert!(to[..PAGE / 2].iter().all(|&b| b == 0xAB));
+        assert!(to[PAGE / 2..].iter().all(|&b| b == 0));
+        unsafe { VirtualFree(base.cast(), 0, MEM_RELEASE) };
+    }
+
+    /// A single long range is one span (no coalescing needed, but proved).
+    #[test]
+    fn single_long_range_is_one() {
+        let from: Vec<u8> = (0..65536u32).map(|i| (i * 13 + 9) as u8).collect();
+        let mut to = vec![0u8; 65536];
+        assert!(guarded(to.as_mut_ptr(), from.as_ptr(), 65536));
+        assert_eq!(to, from, "single long range lands identical bytes");
     }
 }
