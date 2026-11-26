@@ -45,13 +45,13 @@ run (`alt` switches, split into phases with `frames.py --alt`).
 
 | | task | state |
 |:--:|:--|:--|
-| 🔄 | **Zero-copy step 1**: no copy-back except an allowlist | built; slower so far (196.9 ms) — profiler named the cost, fixing |
+| 🔄 | **Zero-copy step 1**: no copy-back except an allowlist | profiler named the cost (run 42); both fixes built and merged, measurement next |
 | 🔄 | **40 "descriptor chosen by control flow"** refusals | building |
 | 🔄 | **The other 18 refusals** + a shader-coverage progress page | building |
 | 🔄 | **Wave64 multi-wave groups** (the 3 hardest) | building |
 | 🔄 | **Rendering fixes**: the red blocks; format, sampling and BC-decode audit | building |
 | 🔄 | **Ray-tracing correctness**: BVH intersection vs the ISA, builder wiring, RT refusals | building |
-| 🔄 | **DLSS plugin, stage 1**: call trace, user-supplied DLL loader, draw hook | built; the 1440p→4K pass found (run 41); DLSS run next |
+| 🔄 | **DLSS plugin, stage 1**: call trace, user-supplied DLL loader, draw hook | world upscale draw found (run 43); loader picks the wrong NGX DLL — fixing |
 | 🔄 | **Pipelining stage 1 + copy-back compare-and-swap** | building |
 | 🔄 | **Green test suite + CI** | 3 of 4 failing tests fixed (they were wrong tests); 4th in progress |
 | 🔄 | **Review fixes**: stub thread count, rewatch switch | building |
