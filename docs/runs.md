@@ -71,3 +71,7 @@ Rows are never removed. A rejection is a result: it stops the same idea being pa
 | 50 | `VICTORY_VIEW_KNOWN=alt` | 4,857 | 7.3 | 137.3 | 344 | — | — | — | ⚖️ clean, neutral (1.018). Not promoted. Ran without the build hold. |
 | 51 | `VICTORY_ABSENT_ONCE=alt` | 4,680 | 7.4 | 135.9 | 342 | — | — | — | ❌ clean, slower (1.044). Not promoted. Ran without the build hold. |
 | 52 | control with sampling profiler (matching symbols) | 4,637 | 7.5 | 132.9 | 341 | — | — | — | ✅ clean; profile kept for analysis. Ran without the build hold. |
+| 53 | present ticket `VICTORY_PRESENT_TICKET=alt` on `00552a92` (wide hashing in the set) | 4,823 | 7.9 | 126.3 | 346 | — | — | — | ⚖️ clean, neutral (0.989). Not promoted. |
+| 54 | wide prepare `VICTORY_WIDE_PREPARE=alt` | 4,359 | 8.0 | 125.7 | 339 | — | — | — | ⚖️ clean, neutral (1.012). Not promoted. |
+| 55 | guard epochs + one pass `VICTORY_GUARD_EPOCH=alt` | 4,453 | 7.6 | 131.0 | 341 | — | — | — | ⚖️ clean, neutral (1.001). Guards still ~13 ms: epochs answer ~430 askings a frame, ~2,300 still walk the guards. Sent back. |
+| 56 | GPU upload heaps `VICTORY_GPU_UPLOAD_HEAP=alt` | 4,810 | 3.8 | 260.0 | 344 | — | — | — | ❌ clean but 2× slower; ON drops ~1,370 draws. Likely video-memory pressure from texture staging in VRAM. Sent back. |

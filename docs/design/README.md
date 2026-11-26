@@ -12,6 +12,7 @@ begins.
 
 | | design | what it changes | expected | effort | status |
 |:--:|:--|:--|:--|:--|:--:|
+| 🎚️ | [**Settings route (native, RT on)**](settings-route.md) | Game settings and resolution runs for 30 fps with ray-traced lighting on and no DLSS | est. −22 to −38 ms needed from trims + Track B | days of runs | ⏳ runs planned |
 | 🧠 | [**Card-authoritative memory**](card-authoritative.md) | The card's copy is the master; CPU pages fault in on first touch | est. −6 to −14 ms first stage; programme −40 to −90 | weeks | 🔄 building |
 | 🎞️ | [**Frame generation**](framegen.md) | Steady presenter, then open-source interpolation; optional user-supplied DLSS-FG | displayed fps only, once real fps ≥ ~16 | weeks | 🔄 presenter built |
 | 🧷 | [**Bindless and pass replay**](bindless.md) | Buffer pull-model, draw runs, per-pass replay (gated on a measured hit rate) | est. 0–3 ms now, 7–22 ms per recorder near 33 ms | weeks | ⏳ tool built |
