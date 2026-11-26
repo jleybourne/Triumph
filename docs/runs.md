@@ -23,7 +23,7 @@ listed at the end of the README.
 | 9 | `VICTORY_MERGE_RUNS=4096` (join contiguous copy ranges) | 4,988 | 5.0 | 201.3 | 347 | — | 11,782 / 206 MB | — | ❌ count unchanged; run also contended with another |
 | 10 | `VICTORY_COPY_MERGE=1` (join runs of adjacent copies) | 4,562 | 6.5 | 154.8 | 345 | — | 11,336–11,795 | — | ❌ nothing joinable: only 28 copies/frame reach that list, 0 continue the one before |
 | 11 | `VICTORY_EARLY_WORLD=1` (start every pipeline at creation) | **33** | — | — | — | — | — | — | ❌ never reached the world in 600 s — starves the load phase |
-| 12 | integrated: per-draw dedup + copy-back merge | — | — | — | — | — | — | — | ⏳ measured, result being written into this table |
+| 12 | integrated: per-draw dedup + copy-back merge | **33** | — | — | — | 0.0 | 18 / 0.3 MB | — | ❌ never reached the world — one of the four switches stalls loading; bisecting |
 
 ## What a row must contain
 
