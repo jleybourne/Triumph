@@ -2114,8 +2114,23 @@ fn changed_chunks(now: &[u8], was: &[u8], chunk: usize) -> Vec<(usize, usize)> {
 
 /// The runs of bytes where `now` differs from `was` (of one length), as
 /// (offset, bytes) in order: every differing byte is in a run and no equal
-/// byte is.
+/// byte is. `coarse` uses chunk-level granularity (4 KiB by default) for
+/// large buffers to produce fewer ranges at the cost of copying some
+/// unchanged bytes within chunks.
 fn changed_runs(now: &[u8], was: &[u8]) -> Vec<(usize, usize)> {
+    changed_runs_with(now, was, false)
+}
+
+/// [`changed_runs`], optionally with coarse chunking.
+fn changed_runs_with(now: &[u8], was: &[u8], coarse: bool) -> Vec<(usize, usize)> {
+    if coarse && refresh_coarse() {
+        let chunk = refresh_coarse_chunk();
+        let threshold = refresh_coarse_threshold();
+        let n = now.len().min(was.len());
+        if n >= threshold {
+            return changed_chunks(now, was, chunk);
+        }
+    }
     if changed_runs_wide_on() { changed_runs_wide(now, was) } else { changed_runs_bytes(now, was) }
 }
 
@@ -2148,6 +2163,45 @@ fn changed_runs_wide_on() -> bool {
             on
         }
     }
+}
+
+/// Whether refreshes of large buffers use coarse-grained chunking to reduce
+/// the number of ranges (`VICTORY_REFRESH_COARSE=1`; off by default).
+///
+/// For scattered changes in large buffers, byte-exact detection produces
+/// thousands of tiny ranges, each with per-copy overhead (~5.5 µs vs 1.0 µs
+/// of actual bytes). Coarse chunking emits whole chunks when any byte
+/// differs, producing fewer ranges at the cost of copying some unchanged
+/// bytes within those chunks. The chunk size (default 4 KiB) and threshold
+/// (default 1 MiB) are configurable.
+fn refresh_coarse() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_REFRESH_COARSE").is_some_and(|v| v == "1"))
+}
+
+/// The chunk size for coarse refresh detection (`VICTORY_REFRESH_COARSE_CHUNK`,
+/// default 4096 bytes). Each chunk with any changed byte is refreshed whole.
+fn refresh_coarse_chunk() -> usize {
+    static CHUNK: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CHUNK.get_or_init(|| {
+        std::env::var("VICTORY_REFRESH_COARSE_CHUNK")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(4096)
+            .max(256)
+    })
+}
+
+/// The minimum buffer size for coarse refresh detection (`VICTORY_REFRESH_COARSE_THRESHOLD`,
+/// default 1048576 bytes = 1 MiB). Smaller buffers use byte-exact detection.
+fn refresh_coarse_threshold() -> usize {
+    static THRESHOLD: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *THRESHOLD.get_or_init(|| {
+        std::env::var("VICTORY_REFRESH_COARSE_THRESHOLD")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(1 << 20)
+    })
 }
 
 /// [`changed_runs`] as it was: equal bytes eight at a time, differing bytes
@@ -2500,6 +2554,74 @@ mod merge_tests {
         // no range dropped, total bytes identical
         let total: usize = merged.iter().map(|&(_, n)| n).sum();
         assert_eq!(total, 30);
+    }
+
+    /// Coarse refresh detection with chunking produces byte-identical results
+    /// for synthetic diffs: fully changed buffer, sparse single-word changes,
+    /// changes with small clean gaps, and no changes at all.
+    #[test]
+    fn coarse_refresh_is_byte_identical_to_exact() {
+        // Test various patterns with different chunk sizes
+        for chunk_size in [256, 1024, 4096] {
+            // Fully changed buffer
+            let was: Vec<u8> = (0..8192).map(|i| (i * 7) as u8).collect();
+            let mut now = was.clone();
+            for b in &mut now {
+                *b = !*b;
+            }
+            let exact = changed_runs(&now, &was);
+            let coarse = changed_chunks(&now, &was, chunk_size);
+            assert_refreshed_identical(&was, &now, &exact, &coarse);
+
+            // Sparse single-word (4-byte) changes
+            let was: Vec<u8> = vec![0xAA; 16384];
+            let mut now = was.clone();
+            for offset in (0..now.len()).step_by(1024) {
+                if offset + 4 <= now.len() {
+                    now[offset..offset + 4].copy_from_slice(&[0x12, 0x34, 0x56, 0x78]);
+                }
+            }
+            let exact = changed_runs(&now, &was);
+            let coarse = changed_chunks(&now, &was, chunk_size);
+            assert_refreshed_identical(&was, &now, &exact, &coarse);
+
+            // Changes with small clean gaps (run 219 pattern: changed bytes with zeros in between)
+            let was: Vec<u8> = vec![0; 8192];
+            let mut now = was.clone();
+            for i in (0..now.len()).step_by(16) {
+                if i < now.len() {
+                    now[i] = 0xFF;
+                }
+            }
+            let exact = changed_runs(&now, &was);
+            let coarse = changed_chunks(&now, &was, chunk_size);
+            assert_refreshed_identical(&was, &now, &exact, &coarse);
+
+            // No changes at all
+            let was: Vec<u8> = (0..4096).map(|i| (i * 13 + 7) as u8).collect();
+            let now = was.clone();
+            let exact = changed_runs(&now, &was);
+            let coarse = changed_chunks(&now, &was, chunk_size);
+            assert!(exact.is_empty());
+            assert!(coarse.is_empty());
+            assert_refreshed_identical(&was, &now, &exact, &coarse);
+        }
+    }
+
+    /// Helper: assert that applying ranges to `was` produces `now`, proving
+    /// the refresh is byte-identical regardless of granularity.
+    fn assert_refreshed_identical(was: &[u8], now: &[u8], exact: &[(usize, usize)], coarse: &[(usize, usize)]) {
+        let mut refreshed_exact = was.to_vec();
+        for &(at, n) in exact {
+            refreshed_exact[at..at + n].copy_from_slice(&now[at..at + n]);
+        }
+        assert_eq!(refreshed_exact, now, "exact refresh must produce `now`");
+
+        let mut refreshed_coarse = was.to_vec();
+        for &(at, n) in coarse {
+            refreshed_coarse[at..at + n].copy_from_slice(&now[at..at + n]);
+        }
+        assert_eq!(refreshed_coarse, now, "coarse refresh must produce `now`");
     }
 }
 
@@ -3577,7 +3699,7 @@ impl Shadow {
                     // bytes at the copy's offsets (`writing`), and these
                     // are in a declared range.
                     let held = unsafe { std::slice::from_raw_parts_mut(snapshot.as_mut_ptr().add(at), n) };
-                    for (r, m) in changed_runs(title, held) {
+                    for (r, m) in changed_runs_with(title, held, true) {
                         // SAFETY: inside the copy's mapping. The card may be
                         // writing the copy beside these bytes; they are
                         // written here and nothing around them.
