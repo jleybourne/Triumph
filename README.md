@@ -28,15 +28,44 @@ developer or publisher.
   are carried here unchanged apart from one merge conflict.
 - This fork's changes were developed with [Claude Code](https://claude.com/claude-code).
 
-## Status of this fork (2026-11-26, 00:00 UTC)
+## Status of this fork (2026-11-26, 12:50 UTC)
 
-**Playable for half an hour at a time, slowly: about 7 to 12 frames per second (the console runs
-30). The tester has played from the opening through the prologue and past the first boat mission.
-Then the graphics card is lost: four times, in sessions of 6, 49, 31 and 38 minutes, the last three
-on the way to the same place in the story, before the title's next save point. Cause not known
-yet. Shadowed areas are still black.**
-Tested on one machine: Windows 11, Intel i7-14700KF, NVIDIA RTX 4070 12 GB,
-32 GB RAM. The Series X profile is used throughout.
+Measured on one machine — Windows 11, Intel i7-10700KF, NVIDIA RTX 4070 Ti 12 GB, 64 GB RAM,
+Series X profile throughout — on the world scene, frames counted only at 1,200 draws or more,
+after the load phase settles:
+
+| build | draws | fps | ms a frame | dropped |
+|---|---|---|---|---|
+| release | 4,710 | **7.7** | **130.0** | 348 |
+| diagnostics | 4,525 | 6.9 | 145.9 | 356 |
+| diagnostics, 960x540 internal | 4,579 | 7.3 | 140.9 | 344 |
+| menus | 8-32 | 30.0 | 33.3 | 0 |
+
+**What a frame is made of**, from the frame line and the card clock:
+
+| part | ms | note |
+|---|---|---|
+| the card, busy | 90.8 | about 20 us per draw; proven to be GPU work, not copy traffic |
+| preparing | 95.0 | of which copies 75.4 ms moving 114.9 MB in 11,542 copies |
+| copying back | 73.9 | 64.7 MB at 0.88 GB/s |
+| pipeline passes | 55.2 | 2,495 pipelines loaded from the library, none compiled |
+
+The parts overlap into the 130-141 ms frame. Two consequences worth knowing before optimising:
+the card is only 64% busy, so the frame is longer than either half; and halving the resolution
+four times over saves 4%, so the card is not fill-rate bound at all.
+
+**Shader coverage**: 25,586 of 25,694 programs in the archive translate (99.58%). The 108 refused
+are one shape — a wave reduction over lanes that are not all running — and `VICTORY_WAVE_MASKED=1`
+runs them approximately. The remaining exact fix needs each lane's mask carried as data, which is
+the per-lane model described in `docs/per-lane.md`.
+
+**Measured and rejected**, so it is not tried twice: restricting the descriptor heap scan
+(`VICTORY_HEAP_SYNC_TABLES=1`, slower at 6.0 fps), joining adjacent copy ranges
+(`VICTORY_COPY_MERGE=1`, copy count unchanged at 11,336-11,795 against 11,542), and rendering at a
+quarter of the pixels (4%).
+
+**Tested on one machine**: Windows 11, Intel i7-10700KF, NVIDIA RTX 4070 Ti 12 GB, 64 GB RAM.
+The Series X profile is used throughout.
 
 | Stage | State in this fork |
 |-------|--------------------|
