@@ -119,6 +119,38 @@ fn write_skip() -> bool {
     *ON.get_or_init(|| std::env::var_os("VICTORY_WRITE_SKIP").is_none_or(|v| v != "0"))
 }
 
+/// Whether to skip redundant target/depth state ensures when the state
+/// is already bound (`VICTORY_SKIP_TARGET_TRANSITIONS=1`; off by default).
+/// The per-draw ensure_state calls for targets at draw.rs:1073 and depth
+/// at draw.rs:1094 check list.transition, which returns None when the
+/// state matches (host.rs:6807), but the barrier at list.rs:793 still
+/// checks and locks. Estimated savings: 4-8 us per draw.
+fn skip_target_transitions() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SKIP_TARGET_TRANSITIONS").is_some_and(|v| v == "1"))
+}
+
+/// Whether to skip redundant descriptor table and root argument sets
+/// when consecutive draws set identical values (`VICTORY_DEDUPE_ROOT_ARGS=1`;
+/// off by default). The per-stage root constant, CBV, SRV, and UAV sets
+/// at draw.rs:1202-1298 are issued every draw even when unchanged.
+/// Estimated savings: 6-12 us per draw.
+fn dedupe_root_args() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_DEDUPE_ROOT_ARGS").is_some_and(|v| v == "1"))
+}
+
+/// Whether to skip redundant IASetVertexBuffers calls when the binding
+/// is unchanged (`VICTORY_SKIP_VERTEX_REBIND=1`; off by default).
+/// IASetVertexBuffers at draw.rs:1055 is called every draw after refresh
+/// even when views are identical. Estimated savings: 2-4 us per draw.
+fn skip_vertex_rebind() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SKIP_VERTEX_REBIND").is_some_and(|v| v == "1"))
+}
+
+
+
 /// A run of indirect records clamped in one pass ([`windows`]): the host
 /// copy they came from (its number), their kind and stride, the offset of
 /// the first in that copy, how many, and the list's scratch buffer that
@@ -401,6 +433,18 @@ pub(crate) struct State {
     root_uav_slots: std::collections::HashMap<(usize, u64), RootSlot>,
     /// The list ran and its dynamic slots were given back.
     tables_gone: bool,
+    /// Optimization A: track last bound targets and depth for this command list.
+    host_targets: Vec<usize>,
+    host_depth: usize,
+    host_depth_state: u32,
+    /// Optimization B: track last root argument sets (graphics, compute).
+    host_root_constants: [Option<(u32, Vec<u32>)>; 2],
+    host_root_cbv: [std::collections::HashMap<u32, u64>; 2],
+    host_root_srv: [std::collections::HashMap<u32, u64>; 2],
+    host_root_uav: [std::collections::HashMap<u32, u64>; 2],
+    /// Optimization C: track last vertex buffer bindings.
+    host_vertex_views: Vec<D3D12_VERTEX_BUFFER_VIEW>,
+    host_index_view: Option<D3D12_INDEX_BUFFER_VIEW>,
 }
 
 impl Drop for State {
@@ -1050,9 +1094,27 @@ impl State {
             };
         }
         // SAFETY: an open list; the views name live host buffers.
+        // Optimization C: skip redundant IASetVertexBuffers.
         unsafe {
             if count > 0 {
-                l.IASetVertexBuffers(0, Some(&views[..count]));
+                if skip_vertex_rebind() {
+                    let current = &views[..count];
+                    let changed = self.host_vertex_views.len() != current.len()
+                        || self.host_vertex_views.iter().zip(current).any(|(a, b)| {
+                            a.BufferLocation != b.BufferLocation
+                                || a.SizeInBytes != b.SizeInBytes
+                                || a.StrideInBytes != b.StrideInBytes
+                        });
+                    if changed {
+                        l.IASetVertexBuffers(0, Some(current));
+                        self.host_vertex_views = current.to_vec();
+                    }
+                } else {
+                    l.IASetVertexBuffers(0, Some(&views[..count]));
+                }
+            } else if skip_vertex_rebind() && !self.host_vertex_views.is_empty() {
+                // Clear binding when count is 0.
+                self.host_vertex_views.clear();
             }
         }
         if indexed {
@@ -1067,11 +1129,39 @@ impl State {
                 Format: DXGI_FORMAT(v.format as i32),
             };
             // SAFETY: an open list; the view names a live host buffer.
-            unsafe { l.IASetIndexBuffer(Some(&view)) };
+            // Optimization C: skip redundant IASetIndexBuffer.
+            unsafe {
+                if skip_vertex_rebind() {
+                    let changed = self.host_index_view.map_or(true, |old| {
+                        old.BufferLocation != view.BufferLocation
+                            || old.SizeInBytes != view.SizeInBytes
+                            || old.Format != view.Format
+                    });
+                    if changed {
+                        l.IASetIndexBuffer(Some(&view));
+                        self.host_index_view = Some(view);
+                    }
+                } else {
+                    l.IASetIndexBuffer(Some(&view));
+                }
+            }
+        } else if skip_vertex_rebind() {
+            self.host_index_view = None;
         }
         const RENDER_TARGET: u32 = 0x4;
-        for &t in &self.targets {
-            crate::list::ensure_state(list, t as This, RENDER_TARGET);
+        // Optimization A: skip redundant target/depth state ensures.
+        if skip_target_transitions() {
+            // Only ensure state if targets or their count changed.
+            if self.host_targets != self.targets {
+                for &t in &self.targets {
+                    crate::list::ensure_state(list, t as This, RENDER_TARGET);
+                }
+                self.host_targets = self.targets.clone();
+            }
+        } else {
+            for &t in &self.targets {
+                crate::list::ensure_state(list, t as This, RENDER_TARGET);
+            }
         }
         if self.depth != 0 {
             // A depth texture shaders also write: what they wrote, first.
@@ -1091,7 +1181,19 @@ impl State {
             } else {
                 DEPTH_WRITE
             };
-            crate::list::ensure_state(list, self.depth as This, state);
+            // Optimization A: skip redundant depth state ensure.
+            if skip_target_transitions() {
+                if self.host_depth != self.depth || self.host_depth_state != state {
+                    crate::list::ensure_state(list, self.depth as This, state);
+                    self.host_depth = self.depth;
+                    self.host_depth_state = state;
+                }
+            } else {
+                crate::list::ensure_state(list, self.depth as This, state);
+            }
+        } else if skip_target_transitions() {
+            self.host_depth = 0;
+            self.host_depth_state = 0;
         }
         true
     }
@@ -1145,6 +1247,14 @@ impl State {
                 }
             }
             self.host_roots[usize::from(compute)] = root;
+            // Optimization B: clear root argument cache when root signature changes.
+            if dedupe_root_args() {
+                let comp_idx = usize::from(compute);
+                self.host_root_constants[comp_idx] = None;
+                self.host_root_cbv[comp_idx].clear();
+                self.host_root_srv[comp_idx].clear();
+                self.host_root_uav[comp_idx].clear();
+            }
         }
         // By host object: a title pipeline released and another made at its
         // address is another host pipeline (the list keeps the old one).
@@ -1197,11 +1307,29 @@ impl State {
                     };
                 }
                 // SAFETY: an open list; `values` covers the parameter.
+                // Optimization B: dedupe root constants.
                 unsafe {
-                    if compute {
-                        l.SetComputeRoot32BitConstants(param, dwords, values.as_ptr().cast(), 0);
+                    if dedupe_root_args() {
+                        let comp_idx = usize::from(compute);
+                        let changed = self.host_root_constants[comp_idx]
+                            .as_ref()
+                            .map_or(true, |(old_param, old_values)| {
+                                *old_param != param || *old_values != values
+                            });
+                        if changed {
+                            if compute {
+                                l.SetComputeRoot32BitConstants(param, dwords, values.as_ptr().cast(), 0);
+                            } else {
+                                l.SetGraphicsRoot32BitConstants(param, dwords, values.as_ptr().cast(), 0);
+                            }
+                            self.host_root_constants[comp_idx] = Some((param, values));
+                        }
                     } else {
-                        l.SetGraphicsRoot32BitConstants(param, dwords, values.as_ptr().cast(), 0);
+                        if compute {
+                            l.SetComputeRoot32BitConstants(param, dwords, values.as_ptr().cast(), 0);
+                        } else {
+                            l.SetGraphicsRoot32BitConstants(param, dwords, values.as_ptr().cast(), 0);
+                        }
                     }
                 }
             }
@@ -1274,12 +1402,32 @@ impl State {
                         ));
                     }
                     // SAFETY: an open list; the address is in live memory.
+                    // Optimization B: dedupe root views.
                     unsafe {
-                        match (compute, srv) {
-                            (false, false) => l.SetGraphicsRootConstantBufferView(param, gpu),
-                            (false, true) => l.SetGraphicsRootShaderResourceView(param, gpu),
-                            (true, false) => l.SetComputeRootConstantBufferView(param, gpu),
-                            (true, true) => l.SetComputeRootShaderResourceView(param, gpu),
+                        if dedupe_root_args() {
+                            let comp_idx = usize::from(compute);
+                            let cache = if srv {
+                                &mut self.host_root_srv[comp_idx]
+                            } else {
+                                &mut self.host_root_cbv[comp_idx]
+                            };
+                            let changed = cache.get(&param).map_or(true, |&old_gpu| old_gpu != gpu);
+                            if changed {
+                                match (compute, srv) {
+                                    (false, false) => l.SetGraphicsRootConstantBufferView(param, gpu),
+                                    (false, true) => l.SetGraphicsRootShaderResourceView(param, gpu),
+                                    (true, false) => l.SetComputeRootConstantBufferView(param, gpu),
+                                    (true, true) => l.SetComputeRootShaderResourceView(param, gpu),
+                                }
+                                cache.insert(param, gpu);
+                            }
+                        } else {
+                            match (compute, srv) {
+                                (false, false) => l.SetGraphicsRootConstantBufferView(param, gpu),
+                                (false, true) => l.SetGraphicsRootShaderResourceView(param, gpu),
+                                (true, false) => l.SetComputeRootConstantBufferView(param, gpu),
+                                (true, true) => l.SetComputeRootShaderResourceView(param, gpu),
+                            }
                         }
                     }
                 }
@@ -1373,11 +1521,27 @@ impl State {
             let base = unsafe { s.buffer.GetGPUVirtualAddress() };
             let gpu = base + ((s.gpu(a) - base) & !15);
             // SAFETY: an open list; the address is in a live buffer.
+            // Optimization B: dedupe root UAVs.
             unsafe {
-                if compute {
-                    list.list.SetComputeRootUnorderedAccessView(param, gpu);
+                if dedupe_root_args() {
+                    let comp_idx = usize::from(compute);
+                    let changed = self.host_root_uav[comp_idx]
+                        .get(&param)
+                        .map_or(true, |&old_gpu| old_gpu != gpu);
+                    if changed {
+                        if compute {
+                            list.list.SetComputeRootUnorderedAccessView(param, gpu);
+                        } else {
+                            list.list.SetGraphicsRootUnorderedAccessView(param, gpu);
+                        }
+                        self.host_root_uav[comp_idx].insert(param, gpu);
+                    }
                 } else {
-                    list.list.SetGraphicsRootUnorderedAccessView(param, gpu);
+                    if compute {
+                        list.list.SetComputeRootUnorderedAccessView(param, gpu);
+                    } else {
+                        list.list.SetGraphicsRootUnorderedAccessView(param, gpu);
+                    }
                 }
             }
             return true;
