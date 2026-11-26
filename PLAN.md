@@ -40,10 +40,10 @@ Updated every 30 minutes while work is running. The latest entry is at the botto
 
 | | step | expected | status |
 |:--:|:--|:--|:--:|
-| 1.1 | `VICTORY_ASYNC_PRESENT=alt`: overlap the title's frame with our submit | 127 → ~85–95 ms (est.) | 🔄 clean rerun running |
+| 1.1 | `VICTORY_ASYNC_PRESENT=alt`: overlap the title's frame with our submit | 127 → ~85–95 ms (est.) | 🔄 **~11 % faster in-run** (on 144.1 / off 154.4 ms, same draws, 7 cycles); one quiet-machine confirmation before the launcher |
 | 1.2 | `VICTORY_GATHER_BY_COPY=alt` (already exists, never measured) | ~2–5 ms GPU | ⏳ |
 | 1.3 | `VICTORY_BACK_POOL`, `VICTORY_BACK_FEWER_WAITS`, `VICTORY_BACK_REGUARD` (built) | 2–15 ms submit thread | ⏳ |
-| 1.4 | PIX timing capture with `VICTORY_MARKERS=1`: GPU time per pass, **confirm the ~40 ms BVH lead** | decides phase 3's order | ⏳ |
+| 1.4 | PIX timing capture with `VICTORY_MARKERS=1`: GPU time per pass | decides phase 3's order | ⏳ markers fixed (Unicode flag) |
 | 1.5 | RenderDoc capture of the red blocks: texture or shader? | decides the fix | ⏳ |
 | 1.6 | `VICTORY_SHADER_STUB=1` floor run, plus an `fsrQuality` 1–4 GPU sweep | how much of the GPU is pixels vs our structure | ⏳ |
 
@@ -63,7 +63,7 @@ Updated every 30 minutes while work is running. The latest entry is at the botto
 
 | | step | expected | design | status |
 |:--:|:--|:--|:--|:--:|
-| 3.1 | **BVH/RT emulation track B:** page lookup once per node, vector loads, early exits | the ~24 ms of traces → ~5–8 ms, *if* 1.4 confirms it | [raytracing](docs/design/raytracing.md) | ⏳ gated on 1.4 |
+| 3.1 | **BVH/RT emulation track B:** page lookup once per node, vector loads, early exits | the RT lighting passes are **dropped today** (builder off); turning them on adds ~40 ms, which track B cuts to ~15–20 ms | [raytracing](docs/design/raytracing.md) | ⏳ gated on 1.4 |
 | 3.2 | Indirect overhead: per-copy gather, barrier merge, one-record clamp, dispatch windows | 6–10 ms | [indirect](docs/design/indirect-overhead.md) | ⏳ |
 | 3.3 | `memory()` fault-store branch (built, off) and scalar work per lane | 2–9 ms | [native-60 research](docs/research/native-60-gpu.md) | 🔄 built |
 | 3.4 | Native quad ops, folded lane indices, reduction ladders | a few ms | [per-lane](docs/design/per-lane.md) | ⏳ |
@@ -112,3 +112,4 @@ Updated every 30 minutes while work is running. The latest entry is at the botto
 | time | update |
 |:--|:--|
 | 2026-11-26 22:20 | Plan written from: runs 26–27 + A/B, the census, 6 research reports, 8 designs. Pipeline fix, AVX2/LTO, wave64 part 1, markers and capture tool merged into the test build (`fast-integ`). In-game: refused pipelines **7 → 6**. The first `ASYNC_PRESENT` A/B was invalid (OBS plus agent compiles); clean rerun running. |
+| 2026-11-26 22:40 | **`ASYNC_PRESENT`: ~11 % faster in-run** (0.890 over 7 cycles, same draws); the machine was still CPU-starved without compilers (remote desktop suspected), so a quiet confirmation comes first. **RT correction:** the ~40 ms BVH figure is from builder-on runs; today's frames skip the RT lighting passes instead, so RT is a correctness cost, not a saving. Review found and fixed: markers were ANSI-flagged (showed one letter), stub thread count, rewatch switch sharing. Game folder renamed to a neutral path. New: research on passthrough, RT, RT settings, presets, resolution, input, developer menu; designs for pipelining, indirect overhead, GPU textures, RT, harness, picture checks, developer menu v2. |

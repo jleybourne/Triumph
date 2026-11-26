@@ -19,6 +19,13 @@ disagree, the disagreement is listed below rather than smoothed over.
 | 🧮 | [**Native 60 fps on the GPU**](native-60-gpu.md) | Why does the title's GPU work cost ~45 ms here, and how is it recovered without upscaling? | The "3× less efficient" premise is soft (closer to 1.65× for this integer-heavy code). Cost is a flat tail of ~1,290 kinds of work. The biggest card-side cost is the structure around indirect draws and dispatches. |
 | 🧩 | [**Running parts natively**](native-paths.md) | What could bypass emulation instead of speeding it up? | No PC shaders or PC build ship with the title, so translation stays. The real bypasses are memory living on the card, the upscaler hook, and GPU-side texture detiling. |
 | 💾 | [**Caching**](caching.md) | Which caches cut load time, stutter and frame time? | Cheapest wins: warm the shader cache after each translator change, preload the working set into RAM. The NVIDIA driver cache is 32 GB and worth investigating. |
+| 🔁 | [**Passthrough audit**](passthrough.md) | Where do we translate what D3D12 could take 1:1? | Mostly passed through already. Best left: constant-buffer tables rebuilt per draw (10–30 ms of recording time). |
+| ☀️ | [**Ray tracing**](raytracing.md) | How to make RT fast on NVIDIA? | Emulated BVH tests are ~20–100× below hardware; faster emulation first, native DXR only if loop shapes are few. |
+| 🔦 | [**RT settings**](rt-settings.md) | What do the RT settings do? | The ~40 ms BVH figure is from builder-on runs only; with it off, ray-traced lighting is **dropped**, so correct lighting costs time. |
+| 🎚️ | [**Settings**](settings.md) · [**Presets**](presets.md) | Which title settings cut GPU work? | Already near the floor; a few ms at most. Presets aren't readable; one test of the preset slider decides if it's live. |
+| 🖥️ | [**Resolution**](resolution.md) | How does the title pick its resolution? | Output follows the mode we report (4K); the scene size follows `fsrQuality`. Plan: report 1080p, then step fsrQuality. |
+| 🎮 | [**Input**](input.md) | Control mapping, native keyboard/mouse | The title registers for keyboard devices; mouse unseen. Configurable key map first, then native or emulated mouse. |
+| 🛠️ | [**Developer menu**](devmenu.md) | How would in-world tools work? | Feasible via the title's native table; discovery first; 6–8 weeks for world tools. |
 
 ## What the reports agree on
 

@@ -16,6 +16,13 @@ begins.
 | 🖼️ | [**DLSS in place of FSR**](dlss.md) | Hook the title's FidelityFX loader (5 exports) and drive DLSS from the same inputs | GPU time down 10–20 ms in performance mode; little fps until zero-copy lands | days | ⏳ after UMA |
 | ⚡ | [**Per-lane and native wave ops**](per-lane.md) | Native quad ops, folded lane indices, reduction ladders and flat regions in the translator | a few ms of card time; settles the 4–8× question first | weeks, staged | ⏳ |
 | 🎮 | [**Debug menu**](debug-menu.md) | In-game overlay, live switches, shader-skip picker, viewers; later teleport and spawning | testing speed, not fps | 3–4 weeks (layer tools) | 💤 after stable 30 fps |
+| 🎮 | [**Developer menu v2**](devmenu.md) | Build-ready: overlay renderer, F10 input gate, live-switch registry, then world tools (discovery, native logger, game-thread queue, crash containment, per-build tables) | testing speed | A: 3–4 wk · B: 6–8 wk | 💤 after stable 30 fps |
+| 🧵 | [**Frame pipelining**](pipelining.md) | Per-frame fence tickets → 3 buffers + waitable swapchain → 2–3 frames in flight; copy-back compare-and-swap first | ~127 → ~75–85 ms; with UMA ~55–60 | days–weeks | 🔄 stage 1 building |
+| 🎯 | [**Indirect overhead**](indirect-overhead.md) | Per-copy gather, barrier merge, one-record clamp, dispatch windows | 6–10 ms GPU | days each | ⏳ |
+| 🧱 | [**GPU textures**](gpu-textures.md) | Mip-level upload, GPU detile, DirectStorage straight to the card, red-block triage | 3–9 ms + streaming backlog | days–weeks | ⏳ |
+| ☀️ | [**Ray tracing**](raytracing.md) | Track B: faster exact emulation (page lookup per node, early exits); track A: native DXR/RayQuery, gated | traces ~24 → ~5–8 ms | B: weeks · A: months | ⏳ B first (owner's call) |
+| 🧪 | [**Experiment harness**](harness.md) | Overnight run queue, contention guard, screenshots, on/off phase split, auto rows | measurement throughput | days | ⏳ (phase split done) |
+| 🖼️ | [**Picture checks**](picture-checks.md) | Black/flat/saturated-block detectors, RenderDoc shader-swap A/B, artefact bisect | catches wrong rendering | days–weeks | ⏳ |
 
 ## How the big one lands
 
