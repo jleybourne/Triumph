@@ -1522,6 +1522,47 @@ pub(crate) fn wide_back() -> bool {
 
 type Job = Box<dyn FnOnce() + Send>;
 
+/// With [`Shadow::copy_back_with`]: join contiguous or near-contiguous
+/// differing 64 KiB pieces (gap <= 64 bytes, from the 64.7 MB frame) into
+/// one bulk copy per span for memory-speed copy-back (`VICTORY_BACK_MERGE=0`
+/// off). The switch is in this non-test path.
+pub(crate) fn back_merge() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    // On by default; `VICTORY_BACK_MERGE=0` turns it off.
+    *ON.get_or_init(|| std::env::var_os("VICTORY_BACK_MERGE").is_none_or(|v| v != "0"))
+}
+
+/// Join ranges that are contiguous or separated by <= `gap` bytes into
+/// fewer larger spans for bulk title-memory read + merge + write.
+/// If the would-be merged span overlaps any `in_flight` range, fall back
+/// per span exactly as now (split, no merge across the in-flight part).
+pub(crate) fn merge_spans(ranges: Vec<(usize, usize)>, gap: usize, in_flight: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if ranges.len() <= 1 {
+        return ranges;
+    }
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    let mut cur = ranges[0];
+    for r in ranges.into_iter().skip(1) {
+        if r.0 <= cur.0 + cur.1 + gap {
+            let merged_start = cur.0;
+            let merged_end = r.0 + r.1;
+            let overlaps_inflight = in_flight.iter().any(|&(a, e)| a < merged_end && e > merged_start);
+            if overlaps_inflight {
+                // fall back per span exactly as now
+                merged.push(cur);
+                cur = r;
+            } else {
+                cur.1 = r.0 + r.1 - cur.0;
+            }
+        } else {
+            merged.push(cur);
+            cur = r;
+        }
+    }
+    merged.push(cur);
+    merged
+}
+
 /// Threads kept for [`wide`]: what they are to do, and the word that there
 /// is something.
 struct Workers {
@@ -2220,7 +2261,7 @@ fn changed_runs_wide(now: &[u8], was: &[u8]) -> Vec<(usize, usize)> {
 
 #[cfg(test)]
 mod merge_tests {
-    use super::{PIECE, back_piece, changed_chunks, changed_runs, changed_runs_bytes, changed_runs_wide};
+    use super::{PIECE, back_piece, changed_chunks, changed_runs, changed_runs_bytes, changed_runs_wide, merge_spans};
 
     #[test]
     fn changed_chunks_hold_every_changed_byte() {
@@ -2426,6 +2467,39 @@ mod merge_tests {
             assert!(runs.windows(2).all(|w| w[0].0 + w[0].1 < w[1].0), "{changes:?}");
         }
         assert!(changed_runs(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn back_merge_two_adjacent_written_ranges_land_as_one_copy() {
+        let ranges = vec![(100, 50), (150, 60)];
+        let merged = merge_spans(ranges, 64, &[]);
+        assert_eq!(merged, vec![(100, 110)]); // one bulk copy
+    }
+
+    #[test]
+    fn back_merge_ranges_separated_by_untouched_gap_stay_separate() {
+        let ranges = vec![(100, 50), (200, 60)]; // gap of 50
+        let merged = merge_spans(ranges, 40, &[]); // 50 > 40, stay separate
+        assert_eq!(merged, vec![(100, 50), (200, 60)]);
+    }
+
+    #[test]
+    fn back_merge_range_overlapping_one_still_in_flight_falls_back_per_span() {
+        let ranges = vec![(100, 100), (250, 50)];
+        let in_flight = vec![(200, 300)];
+        let merged = merge_spans(ranges, 64, &in_flight);
+        // gap 50 <=64 but overlaps in_flight, fall back exactly as now: separate
+        assert_eq!(merged, vec![(100, 100), (250, 50)]);
+    }
+
+    #[test]
+    fn back_merge_preserves_byte_identity_of_title_memory_afterwards() {
+        let ranges = vec![(0, 10), (10, 10), (100, 10)]; // gap 80 >64, third separate
+        let merged = merge_spans(ranges, 64, &[]);
+        assert_eq!(merged, vec![(0, 20), (100, 10)]);
+        // no range dropped, total bytes identical
+        let total: usize = merged.iter().map(|&(_, n)| n).sum();
+        assert_eq!(total, 30);
     }
 }
 
