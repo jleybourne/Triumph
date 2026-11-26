@@ -76,7 +76,9 @@ The launcher `D:\victory-work\scripts\run_play.ps1` is the confirmed set and not
   library. Off by default, with the reason in the code.
 - **`safecopy`** (`rep movsb` instead of kernel copies): ported and crashed, then fixed, then measured —
   no gain, because copies are already made in place (`7,606 in place, 0.6 met a page that was not
-  there`), and the run degraded 141 → 467 ms at the same draw count. Reverted.
+  there`), and the run degraded 141 → 467 ms at the same draw count. Reverted. The crash it caused is
+  a lesson kept below: **our fault handler only takes write faults**, so anything that faults on a
+  *read* (as `rep movsb` does when the title unmaps a page under it) reaches the title and kills it.
 - **`vrsEnabled=true`**: the title makes **zero** shading-rate calls, so it is inert (`docs/settings.md`).
 - **`fsrQuality=4`**: black screen. The one value not to leave in the file.
 - **Series S profile**, smaller textures, a second drawing queue, `ASYNC_SUBMIT` off, mapping pages on
@@ -89,6 +91,12 @@ The launcher `D:\victory-work\scripts\run_play.ps1` is the confirmed set and not
 
 ## The blockers, with their evidence
 
+0. **A startup assert in `4b3fe7e2`.** That commit (the precompiled method-0x218 work) asserts inside
+   D3D12 at startup on this machine: `unhandled exception 0x80000003 at D3D12Core.dll+0x11632`, right
+   after `host D3D12 device ready`, three runs in a row and no frames. `20025213` — the commit before
+   it — runs: `4,270 draws`, no crash. **Until that is diagnosed, 20025213 is the playable build** and
+   the precompiled work stays on branch `fsr` for whoever fixes it next. Do not read the assert as a
+   setting: it happens before any draw, with no `VICTORY_D3D12_DEBUG` set.
 1. **List calls: 20,293 a frame, 243.2 ms on one thread.** The other fork's `VICTORY_THIN` writes the
    calls down and translates them on 8 threads: 36,000 calls = 230 ms over 8 threads, 75 → 68 ms of
    frame. Porting it needs `crates::cores::keep_many_on_fast_cores`, `queue::line_on`,
@@ -123,9 +131,20 @@ cp target/vd3/diag/victory.exe /d/Developer/fxceless-victory/target/diag/victory
 the harness (`docs/runs.md` row 22).
 
 ```powershell
-D:\victory-work\scripts\run_play.ps1        # the confirmed set, 900 s
+D:\victory-work\scripts\run_play.ps1        # the confirmed set only, 900 s
+D:\victory-work\scripts\run_viewplace.ps1   # the same set with INPLACE_VIEW, used for A/B runs
 D:\victory-work\scripts\run-fx.ps1 -Diag -Seconds 600 [-WindowScale ..] [-Roam ..]
 ```
+
+**Stage the playable build, not the newest one.** `wt-verify-port2` at `20025213` builds to
+`target/vd3/diag/victory.exe` and runs; the commit after it asserts at startup (blocker 0). Copy the
+exe to `D:\Developer\fxceless-victory\target\diag\victory.exe` before any launcher.
+
+**Do not put an unmeasured switch in the launcher "because it might help".** The all-on set
+(`LIGHT_REFRESH` + `EARLY_WORLD` + `PORT_CONSTANTS` + `HEAP_SYNC_TABLES` + `LATE_WAITS` on top of the
+confirmed set) crashed the title at startup, and `PRECOMPILED` and `safecopy` each measured worse than
+not having them. A switch goes in the launcher only after a run that beat the baseline with the same
+draw count.
 
 **One instance only.** A live `victory` process makes the next launch exit immediately and the parser
 then reads the **stale** log — this has caused three false conclusions. Confirm the process is gone and
