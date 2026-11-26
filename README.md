@@ -3,6 +3,12 @@
 <p align="center"><b>Running an Xbox Series title natively on Windows — and getting its world<br>
 from 3.4 frames a second to a number worth playing.</b></p>
 
+### Status at a glance
+
+One row per part of the work. The mark on the left is that row's state; the two rightmost columns are
+where it stands **now** — with the numbers actually measured — and what done looks like. Nothing in this
+table is an intention: if a number is there, it came from a run whose log is named at the bottom of this
+page.
 | | status | what it is | now | target |
 |:--:|:--|:--|:--|:--|
 | 🟢 | **Frame rate** | release build, world scene, 4,710 draws a frame | **7.7 fps** · 130 ms · 348 dropped | 30 fps |
@@ -16,6 +22,10 @@ from 3.4 frames a second to a number worth playing.</b></p>
 | ⚠️ | **Dropped draws** | draws lost to pipelines still loading | 344–397 a frame (8% of scene) | 0 |
 | ❌ | **Shadowed areas** | parts of the picture that render black | upstream issue, untouched here | fixed |
 
+### Reading the marks
+
+Shorthand used in the table above and through the rest of this page. **Status** marks say what state a
+thing is in; **confidence** marks say how sure we are of a forecast.
 | mark | means | mark | means |
 |:--:|:--|:--:|:--|
 | ✅ | works, measured | 🟢 | high confidence |
