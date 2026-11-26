@@ -544,6 +544,8 @@ pub fn frame() {
         return;
     }
     crate::cardmeter::collect();
+    #[cfg(feature = "diagnostics")]
+    crate::passtime::collect();
     add(T::RenderLooks, 1);
     if on_slow_core() {
         add(T::RenderSlow, 1);

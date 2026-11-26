@@ -4786,6 +4786,8 @@ impl Host {
                     list.Reset(allocator, None)?;
                     let timed = crate::cardmeter::begin(list, crate::cardmeter::Kind::Sync);
                     #[cfg(feature = "diagnostics")]
+                    let pass_timed = crate::passtime::begin(list, crate::passtime::Phase::Sync);
+                    #[cfg(feature = "diagnostics")]
                     let shot_span = crate::shot::span_begin(list);
                     // Where the next range lies in the landing buffer.
                     let mut at = 0u64;
@@ -4839,6 +4841,8 @@ impl Host {
                         }
                     }
                     crate::cardmeter::end(list, timed);
+                    #[cfg(feature = "diagnostics")]
+                    crate::passtime::end(list, pass_timed);
                     #[cfg(feature = "diagnostics")]
                     crate::shot::span_end(list, shot_span, 0, || "SYNC LIST (changed bytes go up to the card's copies and are hashed)".to_string());
                     list.Close()?;
@@ -4908,6 +4912,8 @@ impl Host {
                     list.Reset(allocator, None)?;
                     let timed = crate::cardmeter::begin(list, crate::cardmeter::Kind::Check);
                     #[cfg(feature = "diagnostics")]
+                    let pass_timed_check = crate::passtime::begin(list, crate::passtime::Phase::Draw);
+                    #[cfg(feature = "diagnostics")]
                     let shot_span = crate::shot::span_begin(list);
                     // What the submission's shaders wrote, first.
                     list.ResourceBarrier(&[D3D12_RESOURCE_BARRIER {
@@ -4969,6 +4975,8 @@ impl Host {
                         plan.inflight_landed = inflight.landed;
                     }
                     crate::cardmeter::end(list, timed);
+                    #[cfg(feature = "diagnostics")]
+                    crate::passtime::end(list, pass_timed_check);
                     #[cfg(feature = "diagnostics")]
                     crate::shot::span_end(list, shot_span, 0, || "CHECK LIST (the card compares the pieces shaders may have written)".to_string());
                     list.Close()?;
@@ -6249,6 +6257,8 @@ impl Host {
             add(C::NothingBackUs, gpu.as_micros() as u64);
         }
         copy_back(0, copying.elapsed().as_micros() as u64);
+        #[cfg(feature = "diagnostics")]
+        crate::passtime::record_cpu(crate::passtime::Phase::CopyBack, copying.elapsed().as_micros() as u64);
         for list in runs {
             // Read backs first: a value written at the bottom of the pipe
             // may be what tells the title that they are there.
