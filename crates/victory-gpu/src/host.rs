@@ -645,8 +645,9 @@ fn card_clock_watch(clock: &'static CardClock) {
 /// frame's time.
 fn card_clock_line(frames: f64, ms: f64) {
     let [idle, behind, stood] = [0, 1, 2].map(|i| CARD_CLOCK_US[i].swap(0, Ordering::Relaxed) as f64 / 1000.0 / frames);
+    let gpu_busy = if ms > 0.0 { (ms - idle).max(0.0) } else { 0.0 };
     tracing::info!(
-        "the card's clock per frame: nothing of ours queued {idle:.1} ms (the card about {:.0}% busy by this count), \
+        "GPU busy {gpu_busy:.1} ms (separate figure for async submit); the card's clock per frame: nothing of ours queued {idle:.1} ms (the card about {:.0}% busy by this count), \
          {behind:.1} ms of that while the submitting thread was working (the card idle behind us), the rest while the title \
          had not submitted; the submitting thread stood waiting for the card {stood:.1} ms",
         if ms > 0.0 { (100.0 * (1.0 - idle / ms)).clamp(0.0, 100.0) } else { 0.0 }
