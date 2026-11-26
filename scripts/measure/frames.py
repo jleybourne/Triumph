@@ -27,7 +27,14 @@ USUAL = re.compile(r"submit thread: at work ([0-9.]+) ms \(user ([0-9.]+), kerne
 
 
 def flip_re(name):
-    return re.compile(r"\(VICTORY_" + re.escape(name) + r"=alt\): (ON|off)\b", re.I)
+    # Switches word their flips differently: "ON" / "off, as usual", or
+    # (VICTORY_NO_COPYBACK, which names what is copied back) "NO, ..." for on
+    # and "yes, ..." for off.
+    return re.compile(r"\(VICTORY_" + re.escape(name) + r"=alt\): (ON\b|off\b|NO,|yes,)", re.I)
+
+
+def flip_phase(word):
+    return "on" if word.lower() in ("on", "no,") else "off"
 
 
 def phase_stats(rows):
@@ -114,7 +121,7 @@ def main() -> int:
             if flip:
                 fm = flip.search(line)
                 if fm:
-                    phase = fm[1].lower()
+                    phase = flip_phase(fm[1])
                     if phase == "on":
                         cycle += 1
                     since, pidx = 0, pidx + 1
@@ -153,8 +160,9 @@ def main() -> int:
     row("best", best)
     print(f"mean    {statistics.mean(r[2] for r in frames):5.0f} draws · {statistics.mean(r[3] for r in frames):4.0f} dropped")
 
-    if a.check_cpu and usual:
-        ratio = statistics.median(cpu / work for work, cpu in usual if work > 0)
+    ratios = [cpu / work for work, cpu in usual if work > 0]
+    if a.check_cpu and ratios:
+        ratio = statistics.median(ratios)
         print(f"submit thread CPU / at-work: {ratio:.2f}")
         if ratio < 0.6:
             print("WARNING: the submit thread was starved of CPU; was something compiling? This run is not a fair measurement.")
