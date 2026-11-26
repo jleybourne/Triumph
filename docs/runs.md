@@ -24,6 +24,8 @@ listed at the end of the README.
 | 10 | `VICTORY_COPY_MERGE=1` (join runs of adjacent copies) | 4,562 | 6.5 | 154.8 | 345 | — | 11,336–11,795 | — | ❌ nothing joinable: only 28 copies/frame reach that list, 0 continue the one before |
 | 11 | `VICTORY_EARLY_WORLD=1` (start every pipeline at creation) | **33** | — | — | — | — | — | — | ❌ never reached the world in 600 s — starves the load phase |
 | 12 | integrated: per-draw dedup + copy-back merge | **33** | — | — | — | 0.0 | 18 / 0.3 MB | — | ❌ never reached the world — one of the four switches stalls loading; bisecting |
+| 13 | per-draw dedup only (copy-back merge off) | **13** | — | — | — | — | — | — | ❌ still never reached the world — the dedup switches themselves stop the scene loading |
+| 14 | **control**: integrated build, all four switches off | 4,940 | 6.7 | 148.9 | 354 | — | — | — | ✅ the build is sound — within variance of #4 and drawing more; the harm is the switches, not the code |
 
 ## What a row must contain
 
