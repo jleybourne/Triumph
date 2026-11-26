@@ -15,7 +15,7 @@ table is an intention: if a number is there, it came from a run whose log is nam
 page.
 | | status | what it is | now | target |
 |:--:|:--|:--|:--|:--|
-| 🟢 | **Frame rate** | release build, world scene, 4,710 draws a frame | **7.7 fps** · 130 ms · 348 dropped | 30 fps |
+| 🟢 | **Frame rate** | world scene, ~4,500 draws a frame | **8.0 fps** · 125 ms · 348 dropped (was 6.9 fps · 145.9 ms) | 30 fps |
 | 🟢 | **Shaders** | console RDNA2 programs translated to DXIL | **25,586 / 25,694** · 99.58% | 25,694 / 25,694 |
 | 🟢 | **Stability** | crashes and device removals across every run measured | **0** | 0 |
 | 🟢 | **Pipeline library** | pipelines loaded from disk instead of compiled | **2,495 loaded · 0 compiled** | unchanged |
