@@ -8609,7 +8609,6 @@ impl Meter {
         crate::shadow::exact_line(frames);
         crate::descriptor::sync_line(frames);
         late_line(frames);
-        card_clock_line(frames, ms);
         crate::queue2::line(frames);
         crate::plaincopy::line(frames);
         #[cfg(feature = "diagnostics")]
@@ -8761,6 +8760,7 @@ impl Meter {
                     per_frame(6) / 1e3
                 );
             }
+            card_clock_line(frames, ms);
             tracing::info!(
                 "{fps:.1} fps, {ms:.1} ms/frame ({cpu:.1} preparing: copies {copy_ms:.1} ms \
                  {copy_mb:.1} MB, textures {texture_ms:.1} ms {texture_mb:.1} MB; {gpu:.1} on the \
