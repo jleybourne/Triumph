@@ -23,6 +23,10 @@ begins.
 | ☀️ | [**Ray tracing**](raytracing.md) | Track B: faster exact emulation (page lookup per node, early exits); track A: native DXR/RayQuery, gated | traces ~24 → ~5–8 ms | B: weeks · A: months | ⏳ B first (owner's call) |
 | 🧪 | [**Experiment harness**](harness.md) | Overnight run queue, contention guard, screenshots, on/off phase split, auto rows | measurement throughput | days | ⏳ (phase split done) |
 | 🖼️ | [**Picture checks**](picture-checks.md) | Black/flat/saturated-block detectors, RenderDoc shader-swap A/B, artefact bisect | catches wrong rendering | days–weeks | ⏳ |
+| 🪟 | [**UI planes**](ui-rendering.md) | The title presents game + UI planes; we showed plane 0 only (HUD/menus dropped). Compositor ported behind `VICTORY_UI_PLANES` | restores HUD/menus, ~0.3 ms | days | 🔄 built, in-game test running |
+| 💾 | [**Game saves**](game-saves.md) | Saves work on disk; harden: checksums, keep-old-until-valid, quarantine, real quota, call logging, backups | durability | days | ⏳ |
+| 🏠 | [**Main menu**](main-menu.md) | Trace the menu's calls, add the missing dialogs and save calls, boot-to-menu mode | a real Continue/New/Load/Settings menu | days | ⏳ |
+| 🚀 | [**Launcher**](launcher.md) | Rust egui app: setup/validation, profile picker, switches, cache warm-up, saves, logs | usability | v1 1.5–2 wk | 💤 parked |
 
 ## How the big one lands
 

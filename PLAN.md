@@ -51,7 +51,7 @@ Updated every 30 minutes while work is running. The latest entry is at the botto
 
 | | step | expected | design | status |
 |:--:|:--|:--|:--|:--:|
-| 2.1 | **Zero-copy step 1:** no copy-back except an allowlist | −35 to −40 ms submit | [uma](docs/design/uma.md) | 🔄 agent building |
+| 2.1 | **Zero-copy step 1:** no copy-back except an allowlist | −35 to −40 ms submit | [uma](docs/design/uma.md) | 🔄 built (`VICTORY_NO_COPYBACK`), in-game A/B running |
 | 2.2 | Zero-copy step 2: drop the hash lists | −20 ms card | uma | ⏳ |
 | 2.3 | Zero-copy step 3: section heaps | copies 23.5 → ~8 ms | uma | ⏳ |
 | 2.4 | **Pipelining:** fence tickets → 3 buffers → 2 frames ahead | max(title, submit, card) instead of their sum | [pipelining](docs/design/pipelining.md) | 🔄 stage 1 + compare-and-swap built (`c1d18e91`), unmeasured |
@@ -75,8 +75,8 @@ Updated every 30 minutes while work is running. The latest entry is at the botto
 
 | | step | status |
 |:--:|:--|:--:|
-| 4.1 | The last 58 untranslated programs: 40 descriptor-by-control-flow, 18 others | 🔄 two agents |
-| 4.2 | The last 6 wave64 shaders: multi-wave groups and wave-wide branches | 🔄 agent |
+| 4.1 | The last 58 untranslated programs | ✅ all 58 fixed across `descriptor-phi` (40) and `shader-rest` (18); 100 % pending a merged census |
+| 4.2 | The 7 refused wave64 pipelines | ✅ 3 fixed, 🧪 3 to test in-game, ❌ 1 impossible exactly on 32-lane cards (needs all 32 KB of LDS) |
 | 4.3 | Rendering bugs: the red blocks, format and sampling audit | 🔄 agent |
 | 4.4 | Ray-tracing correctness: BVH intersection against the ISA, builder wiring | 🔄 agent |
 | 4.5 | Textures: **raise the full texture-slot budget** ("card has no room", 167×), then mip-level upload → GPU detile → DirectStorage straight to the card | ⏳ [gpu-textures](docs/design/gpu-textures.md) |
@@ -115,3 +115,4 @@ Updated every 30 minutes while work is running. The latest entry is at the botto
 | 2026-11-26 22:20 | Plan written from: runs 26–27 + A/B, the census, 6 research reports, 8 designs. Pipeline fix, AVX2/LTO, wave64 part 1, markers and capture tool merged into the test build (`fast-integ`). In-game: refused pipelines **7 → 6**. The first `ASYNC_PRESENT` A/B was invalid (OBS plus agent compiles); clean rerun running. |
 | 2026-11-26 22:40 | **`ASYNC_PRESENT`: ~11 % faster in-run** (0.890 over 7 cycles, same draws); the machine was still CPU-starved without compilers (remote desktop suspected), so a quiet confirmation comes first. **RT correction:** the ~40 ms BVH figure is from builder-on runs; today's frames skip the RT lighting passes instead, so RT is a correctness cost, not a saving. Review found and fixed: markers were ANSI-flagged (showed one letter), stub thread count, rewatch switch sharing. Game folder renamed to a neutral path. New: research on passthrough, RT, RT settings, presets, resolution, input, developer menu; designs for pipelining, indirect overhead, GPU textures, RT, harness, picture checks, developer menu v2. |
 | 2026-11-26 22:45 | No runs this half-hour (agents building). **Fidelity finding:** ~336 of the ~339 dropped draws are the RT builder stage (off by default), not untranslated shaders; the dark look is missing GI; the texture-slot budget is full (new item 4.5). Built: pipelining stage 1 + copy-back CAS, rendering-fix view cast (no translator/BC bug found), review fixes. Test build `0e3d0578` compiling for the next measurement batch. |
+| 2026-11-26 23:15 | **Shaders:** all 58 census refusals fixed across two branches (100 % expected once merged and re-counted); wave64: 3 of 7 fixed, 3 to test, 1 impossible. **Built and merged into the test build:** zero-copy step 1, UI-plane compositor, DLSS plugin stage 1 (NVIDIA-signed DLL ready), pipelining stage 1 + copy-back CAS, console profiles, RT correctness, green test suite. **Running:** zero-copy step 1 in-run A/B with UI-plane and upscaler logging. New designs: UI planes, saves, main menu, launcher; research: console techniques. |

@@ -27,6 +27,7 @@ disagree, the disagreement is listed below rather than smoothed over.
 | 🎮 | [**Input**](input.md) | Control mapping, native keyboard/mouse | The title registers for keyboard devices; mouse unseen. Configurable key map first, then native or emulated mouse. |
 | 🛠️ | [**Developer menu**](devmenu.md) | How would in-world tools work? | Feasible via the title's native table; discovery first; 6–8 weeks for world tools. |
 | 🎨 | [**Visual fidelity**](fidelity.md) | Why doesn't it look like the release? | ~336 of ~339 dropped draws are the RT builder stage (off): the missing GI is the dark look. Texture slot budget is full. A release-look settings profile to apply one item per run. |
+| 🕹️ | [**Console techniques**](console-tricks.md) | What does the title lean on, and how should each map to PC? | Ranked: unified memory → GPU-driven indirect → GPU detile → async compute (after zero-copy) → DLSS; mesh shaders already native. |
 
 ## What the reports agree on
 
