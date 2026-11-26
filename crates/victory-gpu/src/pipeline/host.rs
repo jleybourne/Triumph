@@ -958,19 +958,18 @@ fn root_signature(
                 pParameters: params.as_ptr(),
                 NumStaticSamplers: samplers.len() as u32,
                 pStaticSamplers: samplers.as_ptr(),
-                // D3D12 forbids static samplers in a root signature carrying
-                // D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED. A shader
-                // that declares samplers is given static ones by this layer, so the
-                // flag must go or creation fails with E_INVALIDARG (0x80070057) -
-                // four compute pipelines, about 350 draws a frame. It is set only
-                // when the signature has no static samplers to conflict with.
-                Flags: if samplers.is_empty() {
-                    input
-                        | D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
-                        | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED
-                } else {
-                    input | D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
-                },
+                // Both heaps are always directly indexed. The translated shaders
+                // index the sampler heap (SamplerDescriptorHeap[]) even when they
+                // also get static samplers, and the debug layer refuses such a
+                // pipeline when this flag is missing: "Shader uses sampler
+                // descriptor heap indexing, but root signature is missing the
+                // D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED flag"
+                // (E_INVALIDARG, ~300 compute pipelines, 348-549 draws a frame).
+                // An earlier change dropped the flag whenever static samplers
+                // existed, on the untested belief that the two cannot be combined.
+                Flags: input
+                    | D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
+                    | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED,
             },
         },
     };
