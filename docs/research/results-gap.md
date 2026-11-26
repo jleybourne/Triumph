@@ -218,3 +218,76 @@ No work counter explains it. Copies, guards (12.3 → 13.0 ms), watches, hash pa
 The run also slowed within itself (thirds 144 → 150 → 156) with a falling card, and had the lowest CPU/at-work ratio of the night (0.49). Through the loop's elasticities, a ~5 % slower CPU explains the +17. That points to the session, or to the new build's per-call cost, not to a single regression.
 
 For the `VICTORY_PAGE_WRITES=guards` check, compare **µs per list call** (8.46 on run 34, 8.87 on run 17, 9.32 on run 19), submit kernel ms and guards ms against run 17, not the frame alone. Repeat the control once to tell the session from the build.
+
+---
+
+## 10. Update 09:30: build 605cc013 (runs 33–35) against 00552a92 (08:01–08:27)
+
+Logs: `-090121` (run 33, ORDERED_COPY=alt), `-091022` (run 35, ORDERED_COPY=1 + PIPE_AHEAD=alt), `-091900` (run 34, WAVE_UNIFORM=1), and `-080149`/`-081049`/`-081926`/`-082802` (00552a92, each with its own `alt`). The parser in `gap-model\parse.py` now accepts the new "ticket wait" and "title's compute queue" fields.
+
+### 10.1 The frame now belongs to the submit thread
+
+Wide card hashing (in the confirmed set) took our card lists from 34 to ~11.5 ms (send-and-hash 9.5 + compare 2.0). The frame went from 138 to ~126 ms. Against −22 to −24 ms of card work, that is the ~0.6 elasticity section 6 predicted (model −15, measured −12).
+
+The card now has **50–60 ms idle a frame** (usual-scale), so it is no longer in the chain at all. The submit thread accounts for the whole frame:
+
+| run (00552a92 unless said) | between (waiting for the title) | before preparing ("lock") | CPU inside submissions | sum | frame |
+|---|--:|--:|--:|--:|--:|
+| 080149, PRESENT_TICKET alt | 10.5 | 41.2 | 77.8 | 129 | 126.3 |
+| 081049, WIDE_PREPARE alt | 13.3 | 40.1 | 78.1 | 132 | 125.7 |
+| 091900 (605cc013, WAVE_UNIFORM=1) | 9.5 | 43.6 | 80.4 | 134 | 130.2 |
+| 090121 ON (605cc013, ordered copies) | 19.0 | 24.7 | 99.6 | 143 | 140.9 |
+| 090121 OFF | 8.6 | 52.0 | 86.7 | 147 | 143.4 |
+
+### 10.2 Q1: what holds the frame to one in flight
+
+- **Run 35 never pipelined.** PIPE_AHEAD refused itself at start: `VICTORY_PIPE_AHEAD asks for frames in flight without VICTORY_BACK_CAS=1 ... so one frame ahead as usual` (pipefence.rs `ahead()` [C]). That is why the alt toggle lines never appear, and why the pipefence line shows "presents behind the line (VICTORY_PIPE_AHEAD, **1** frames)". **Fix: set `VICTORY_BACK_CAS=1` beside `VICTORY_PIPE_AHEAD`.** The detectors already counted hazards with one frame (rewrites under flight in 64 of 64 frames in the last window), so expect CAS conflicts once it is on.
+- **Even with it on, two in flight cannot hide much.** The title is not what limits: ticket wait 0, paced 0, the present returns at once, and mwait is 15–21 ms. The card has 50–60 ms idle. The limit is the submit thread's own **~120–125 ms of work per frame**: ~80 ms of CPU inside submissions plus ~41 ms before preparing, of which ~25–30 ms is still "title memory read" landing waits on the OFF path. Pipelining overlaps the title and the card with that work. It does not shorten it. The model's ceiling with PIPE_AHEAD working is about between-time saved, ~10 ms.
+- **Ordered copies trade the landing wait for submit CPU, ms for ms** (090121 ON against OFF):
+  - landing waits −27 ms (settles 32 → 2.7)
+  - CPU in submissions +13 ms
+  - waiting for the title +10 ms
+  - relay landing +13 ms (copy-back MB +7; title bytes put in under flights 84 → 263 pages)
+
+  The fill scatter is batched now (5,556 fills in ~12 dispatches), but each moved fill still pushes its own `Step::Refresh` of its source (host.rs ~2712 [C]). So ~5,500 refresh steps a frame remain on the submit thread. The moved copies' destinations are also declared card-written, so the copy-back grows.
+- **The concrete link and change:** the frame = the submit thread's CPU + its pre-preparation. Two changes:
+  1. Refresh the **union span** of the moved fills' sources once per submission instead of per fill. With that, ordered copies should keep ~−27 ms of waits for ~+3 ms of CPU.
+  2. Then cut the submit thread's copies (~50 ms of the CPU). WIDE_PREPARE alt moved nothing (+1.1 ms per cycle, CI −2 to +4): copies 51.8 → 48.0 ms, but the time between submissions rose 9.6 → 16.3 ms. Per thread, its parallel copying freed ~6 ms of submit-thread CPU and ~5 ms of pre-preparation, and the submit thread waited ~7 ms longer for the title's next part (section 10.5).
+- **Add one counter:** what the worker waits for between submissions (title lists not yet closed, or a queue part held on a fence value that the relay sets at landing). The +10 ms "between" under ordered copies follows the +13 ms landing, which fits the second.
+
+### 10.3 Q2: why 605cc013 reads ~15 ms slower
+
+**It is not the build. It is ordered copies being on in runs 33 and 35.** The same build without them, run 34 (`091900`), runs **130.2 ms**: +3.9 against 00552a92's 126.3, inside the same-build noise (section 4: ~2 ms SD, 4 % range).
+
+Run 34 against 080149, by counter:
+- card title lists +2.6 ms (cardmeter 57.8 → 60.4)
+- relay landing +4.1
+- before preparing +2.4
+- submit CPU +2.6
+- process user +22 ms
+
+Runs 33/35 against run 34:
+- relay landing +10 ms
+- CPU in submissions +13 to +20 ms
+- run 35: copies **93.8 ms at 104 MB** against 53.6 ms at 116 MB. The pipelining detectors stay on whenever PIPE_AHEAD is asked, even when refused (`ahead_asked()` keeps the tickets and detectors), and the hazard checks walk every refresh
+
+So run 35 also pays for detectors of a mode that never engaged.
+
+### 10.4 Q3: run 34's 129.5 ms is not a shader win
+
+- The card is not in the chain (50–60 ms idle), so a shader cut cannot show in the frame, by the model or by elasticity.
+- The card counter shows no cut either: title lists 60.4 ms against 57.8 (080149) and 59.0 (run 33), at the same draw count.
+- 129.5 against run 33's 142.8 is the absence of ordered copies (section 10.3), not the shader change.
+
+Judge WAVE_UNIFORM and the fault branch on **cardmeter title-list ms**, which resolves ~1 ms, in the 36–38 trio (section 10.5).
+
+### 10.5 What the 00552a92 `alt` runs say
+
+Every switch measured this morning is neutral, and each is neutral for the reason the model gives:
+
+| switch | frame per cycle (CI) | what moved | why the frame didn't |
+|---|---|---|---|
+| PRESENT_TICKET | −0.9 (−16 to +0.5) | long frames already ~0 | pairs cost ~2 ms on the mean (section 2) |
+| WIDE_PREPARE | +1.1 (−2 to +4) | copies −4 ms, before preparing −4.5 | between submissions +6.7: the submit thread waits for the title's next part instead |
+| GUARD_EPOCH | −0.2 (−3 to +3) | nothing (guards ms unchanged) | — |
+| GPU_UPLOAD_HEAP | −2.2 (−7.5 to +3.3) | run at 260 ms, unrepresentative | — |
