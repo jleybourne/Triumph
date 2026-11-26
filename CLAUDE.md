@@ -46,7 +46,9 @@ frame                 131.3 ms median · 7.6 fps · ~4,500 draws
   list calls          20,293 per frame = 243.2 ms of work on the submitting thread
 ```
 
-Best frame recorded: **8.9 fps / 112.2 ms** at `fsrQuality=3`. Session start was 3.4 fps / 295 ms.
+Best frame recorded: **9.00 fps / 111.3 ms** at 3,962 draws (row 25 of `docs/runs.md`, the confirmed
+set only with `fsrQuality=3`; median for that run 132.1 ms / 7.60 fps over 63 full frames). Session start
+was 3.4 fps / 295 ms.
 
 **A frame-time win that draws fewer draws is not a win.** Every figure must be reported as
 `fps · ms · draws · dropped`.
