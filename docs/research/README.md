@@ -28,6 +28,7 @@ disagree, the disagreement is listed below rather than smoothed over.
 | 🛠️ | [**Developer menu**](devmenu.md) | How would in-world tools work? | Feasible via the title's native table; discovery first; 6–8 weeks for world tools. |
 | 🎨 | [**Visual fidelity**](fidelity.md) | Why doesn't it look like the release? | ~336 of ~339 dropped draws are the RT builder stage (off): the missing GI is the dark look. Texture slot budget is full. A release-look settings profile to apply one item per run. |
 | 🕹️ | [**Console techniques**](console-tricks.md) | What does the title lean on, and how should each map to PC? | Ranked: unified memory → GPU-driven indirect → GPU detile → async compute (after zero-copy) → DLSS; mesh shaders already native. |
+| 🔧 | [**Fork renderer ports**](fork-renderer-ports.md) | Which of the RX 7900 XTX fork's CPU-side ports apply to us? | Port 6 (guard lock + parallel refresh planning) first, then port 5 (constant buffers in place), 2, 7. Port 6 is merged. |
 
 ## What the reports agree on
 
