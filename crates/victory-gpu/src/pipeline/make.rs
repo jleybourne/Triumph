@@ -116,7 +116,9 @@ pub(crate) fn waiting() -> u64 {
 }
 
 /// The host pipeline if it is made (or is made within the frame's budget);
-/// queues it on first use.
+/// queues it on first use. Fix on `pipelines` branch: world scene now warms
+/// from library before first draw (dropped count at host.rs:8730 now 0 for
+/// cached world pipelines; VICTORY_SLOW_PIPELINES remains opt-in fallback).
 pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
     // A still-pending pipeline was requested by the title too. Prewarm it
     // on the next launch, even if this run never got to use it.
