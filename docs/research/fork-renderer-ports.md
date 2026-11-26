@@ -1,4 +1,4 @@
-# Avatar fork renderer ports 1-7 vs our fast-integ tree
+# The RX 7900 XTX fork renderer ports 1-7 vs our fast-integ tree
 
 Sources: `git log/show the RX 7900 XTX fork`. reports/PORT-PATCH-*.md are not on that branch, so figures come from README and commit bodies. Code exists for ports 1, 2, 5, 6, 7 only (no 3; "patch 4" is folded into 7). Gains "here" are my estimates.
 
