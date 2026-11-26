@@ -1,15 +1,43 @@
-# VIctory fork — performance work on one title
+<h1 align="center">Triumph</h1>
 
-A work-in-progress fork of [VIctory](https://github.com/Marvisak/VIctory): a compatibility layer
-that runs an Xbox Series title natively on Windows, from files the user supplies.
+<p align="center"><b>Running an Xbox Series title natively on Windows — and getting its world<br>
+from 3.4 frames a second to a number worth playing.</b></p>
 
-**This repository contains no game files, code or assets.** You need your own copy of the title.
-Nothing here is affiliated with or endorsed by its developer or publisher.
-
-This fork tracks upstream `main` and exists for one purpose: **make the 3D world run at a playable
-frame rate on one particular machine, without losing picture or correctness.**
+<p align="center">
+  7.7 fps · 130 ms a frame · 4,710 draws a frame &nbsp;|&nbsp;
+  25,586 / 25,694 shaders translate &nbsp;|&nbsp;
+  target 30 fps
+</p>
 
 ---
+
+A fork of [VIctory](https://github.com/Marvisak/VIctory) — a compatibility layer that runs an Xbox
+Series title natively on Windows, from files the user supplies. This fork tracks upstream `main` and
+exists for one purpose: **make the 3D world run at a playable frame rate on one particular machine,
+without losing picture or correctness.**
+
+> [!IMPORTANT]
+> **This repository contains no game files, code or assets.** You need your own copy of the title.
+> Nothing here is affiliated with or endorsed by its developer or publisher.
+
+## Shaders
+
+Every GPU program the title ships has to be decoded from the console's RDNA2 form and re-emitted as
+DXIL before the card will run it. This is the count, measured over the title's own shader archive:
+
+```
+  25,586 / 25,694  ██████████████████████████████████░░  99.58%
+```
+
+| stage | translated | of | |
+|:--|--:|--:|--:|
+| vertex + pixel | 14,156 | 14,247 | `█████████████████████████████████░` 99.36% |
+| compute | 2,668 | 2,682 | `█████████████████████████████████░` 99.48% |
+| mesh | 8,762 | 8,765 | `██████████████████████████████████` 99.97% |
+
+The **108 refused** programs are all one shape — a wave reduction over lanes that are not all
+running. They run today with `VICTORY_WAVE_MASKED=1` (approximately); the exact fix is being written
+now and needs each lane's execution mask carried as data. See `docs/per-lane.md`.
 
 ## Where we stand now
 
@@ -45,7 +73,7 @@ These overlap into the 130–141 ms frame. Two facts organise everything below:
 ## What's working
 
 ✅ **The world renders and is playable.** Full scene draws at 4,500–6,900 draws a frame.
-✅ **Shader coverage 25,586 / 25,694 = 99.58%.** The 108 refused programs are one shape and
+✅ **Shader coverage 99.58%** (see [Shaders](#shaders)). The 108 refused programs are one shape and
   `VICTORY_WAVE_MASKED=1` runs them approximately.
 ✅ **No crashes or device removals** in the runs measured here (0 faults across every run measured).
 ✅ **Load → world pipeline library** works: 2,495 pipelines loaded, **0 compiled** per run.
