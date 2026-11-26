@@ -80,6 +80,10 @@ pub(crate) struct Shadow {
     /// and the bytes from the buffer's first byte to `start` (the heap
     /// begins on a 64 KiB line; a title buffer need not).
     place: Option<(windows::Win32::Graphics::Direct3D12::ID3D12Heap, u64)>,
+    /// With `crate::inplace::more()`: copy-back uses title memory directly
+    /// (not the placed buffer's map), for coherency: shader writes go to
+    /// the heap, copy-back reads title memory after the GPU is done.
+    inplace_more: bool,
 }
 
 /// What a copy in the card's memory ([`cards`]) has beside the buffer
@@ -3015,6 +3019,7 @@ impl Shadow {
             window: false,
             uploaded: 0,
             place: None,
+            inplace_more: false,
         }
     }
 
@@ -4395,8 +4400,10 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
         // memory. Not the big ones `cards` puts in the card's memory: those
         // are read too often to stay in the PC's.
         let big = cards() && size >= card_limits().0;
-        if !big && let Some(placed) = crate::inplace::place_for(key.0, len, false) {
-            entry.shadow = Some(Arc::new(Shadow::placed(placed, key.0, len, false)));
+        if !big && crate::inplace::more() && let Some(placed) = crate::inplace::place_for(key.0, len, false) {
+            let mut shadow = Shadow::placed(placed, key.0, len, false);
+            shadow.inplace_more = true;
+            entry.shadow = Some(Arc::new(shadow));
             return entry.shadow.clone();
         }
         let (buffer, data) = host()?.shared_buffer(size)?;
