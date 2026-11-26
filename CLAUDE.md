@@ -33,10 +33,23 @@ game    <game data folder> (209 GB; shaders.rpf 411 MB)
 work    D:\victory-work\    (logs, captures, worktrees, scripts — never C:\...\Temp)
 ```
 
+`D:\victory-work` and `D:\victory-data` are junctions to `D:\triumph\victory-work` and
+`D:\triumph\victory-data`; every script and `victory.toml` use the `D:\victory-*` paths.
+
+The title reports a **3840x2160** display mode and presents at 4K; its scene renders at **2560x1440**
+(11 targets) with 1280x720 and 960x540 effect buffers, at `fsrQuality` 3 and 4 alike.
+
 The console's wave size is 64; this card's is 32. Every wave64 operation is split into two 32-lane
 halves. That is structural and it is why the same build is slower here than on an RDNA3 card.
 
 ## Where a frame goes (measured, diagnostics build, world)
+
+Read from the frame account (`usual frame` line), not guessed: the title's render thread runs 6 ms
+and waits **67.5 ms in present** for our submit thread, which is at work 74 ms (preparing 56: copies
+23.5 ms / 72 MB, copy-back 42.8 ms / 56 MB). The card is **idle 43.8 ms**; of its ~71 ms busy, 26 ms
+are our own lists (send-and-hash 19.8, compare 6.4) and ~45 ms the title's. List recording (231 ms in
+36,701 calls) runs on the title's worker threads in parallel — **0.0 ms of it on the render thread**.
+So the wall is our memory mirroring, not the GPU and probably not list calls.
 
 ```
 frame                 131.3 ms median · 7.6 fps · ~4,500 draws
@@ -82,7 +95,8 @@ The launcher `D:\victory-work\scripts\run_play.ps1` is the confirmed set and not
   a lesson kept below: **our fault handler only takes write faults**, so anything that faults on a
   *read* (as `rep movsb` does when the title unmaps a page under it) reaches the title and kills it.
 - **`vrsEnabled=true`**: the title makes **zero** shading-rate calls, so it is inert (`docs/settings.md`).
-- **`fsrQuality=4`**: black screen. The one value not to leave in the file.
+- **`fsrQuality=4`**: black on the old build only. On `pipeline-samplers` it renders (row 27) but gives
+  no gain while the frame waits on copies (145.3 ms median against 136.6 at level 3). Kept at 3.
 - **Series S profile**, smaller textures, a second drawing queue, `ASYNC_SUBMIT` off, mapping pages on
   16 threads, scalar buffer loads, wave sizes, fused multiply-adds — each measured by us or by the other
   fork as neutral. Series S additionally renders black here (0 refusals, draws succeed, present texture
@@ -99,7 +113,9 @@ The launcher `D:\victory-work\scripts\run_play.ps1` is the confirmed set and not
    it — runs: `4,270 draws`, no crash. **Until that is diagnosed, 20025213 is the playable build** and
    the precompiled work stays on branch `fsr` for whoever fixes it next. Do not read the assert as a
    setting: it happens before any draw, with no `VICTORY_D3D12_DEBUG` set.
-1. **List calls: 20,293 a frame, 243.2 ms on one thread.** The other fork's `VICTORY_THIN` writes the
+1. **List calls: 20,293 a frame, 243.2 ms of recording** — but the `usual frame` line puts **0.0 ms**
+   of it on the render thread (it runs on the title's workers), so measure that THIN shortens
+   *present* before building it. The other fork's `VICTORY_THIN` writes the
    calls down and translates them on 8 threads: 36,000 calls = 230 ms over 8 threads, 75 → 68 ms of
    frame. **Staged on branch `thin-port` (`95b07ede`), pushed to Triumph:** `list/thin.rs` (912 lines),
    `queue/behind.rs` (1,086) and `cores.rs` (107) are in place but *not declared*, so that branch builds
@@ -108,17 +124,23 @@ The launcher `D:\victory-work\scripts\run_play.ps1` is the confirmed set and not
    what `thin.rs` assumes), the measurement commands, and the traps. Start there, not from the fork.
 2. **The upscaler.** The title's FSR passes call device method 0x218; with `VICTORY_PRECOMPILED=1` they
    are made from the containers (log: `calls=1,2,3,4,8`), but the path is 4× more expensive per draw.
-   `fsrQuality` 4 never presents a picture. The internal render scale is otherwise unreachable: the
+   `fsrQuality` 4 renders on `pipeline-samplers` (row 27; it was black only while ~300 compute
+   pipelines were refused) but measures no gain yet. The internal render scale is otherwise unreachable: the
    title derives it from its own settings file, not from the display mode we report (426×240 reported,
    GPU unchanged).
 3. **Zero-copy of the big card buffers.** Placement works (`26,393 views of placed memory`), but the
    port places **0 regions** because `inplace::stretch()` asks for one contiguous run of one section
    and the title's 32-bit heap is mapped page by page (`Cover::Scattered`). The other fork maps one
    185 MB view of the whole heap.
-4. **348-549 draws a frame dropped** on four compute pipelines (~87 draws each, 8 % of the scene):
-   `E_INVALIDARG (0x80070057)` at PSO creation. Cause found: static samplers combined with
-   `SAMPLER_HEAP_DIRECTLY_INDEXED` is forbidden; the fix (drop only the sampler flag when static
-   samplers exist) is implemented in `wt-rs` and has never been measured in world.
+4. **Dropped draws — mostly fixed.** 311 compute pipelines were refused (`E_INVALIDARG`). The debug
+   layer (`VICTORY_D3D12_DEBUG=1`) named the cause 299 times: *"Shader uses sampler descriptor heap
+   indexing, but root signature is missing ... SAMPLER_HEAP_DIRECTLY_INDEXED"*. The earlier change that
+   dropped that flag beside static samplers (on the untested belief they cannot combine) **was the
+   cause**. Fixed on branch `pipeline-samplers` (`d1e1af34`): flag always set; refusals 311 → 7, draws
+   3,962 → 4,706, dropped ~478 → 344 (row 26). The 7 left want 64-lane waves (`Shader wants wave lane
+   count of 64 but maximum ... is 32`); with the shaders that do not translate at all they are the
+   remaining ~344. Branch `wave64-split` takes them on (xcl's `docs/wave64-on-wave32.md` design — read,
+   not copied: xcl is GPL-2.0-only).
 5. **The 14 GB refresh path.** `14405 refreshes 14112.5 MB, 0 skipped` per frame against ~83 MB copied:
    the refresh ranges are hashed, and that lands inside `preparing`. `VICTORY_LIGHT_REFRESH` exists and
    checking it is unfinished.
@@ -140,8 +162,9 @@ D:\victory-work\scripts\run_viewplace.ps1   # the same set with INPLACE_VIEW, us
 D:\victory-work\scripts\run-fx.ps1 -Diag -Seconds 600 [-WindowScale ..] [-Roam ..]
 ```
 
-**Stage the playable build, not the newest one.** `wt-verify-port2` at `20025213` builds to
-`target/vd3/diag/victory.exe` and runs; the commit after it asserts at startup (blocker 0). Copy the
+**Stage the playable build, not the newest one.** `pipeline-samplers` (`d1e1af34`, on `20025213`) is the
+playable build; `victory-20025213.exe` beside the staged exe is the one before it. `4b3fe7e2` asserts at
+startup (blocker 0). Copy the
 exe to `D:\Developer\fxceless-victory\target\diag\victory.exe` before any launcher.
 
 **Do not put an unmeasured switch in the launcher "because it might help".** The all-on set
@@ -171,6 +194,12 @@ path, check the junction first (`dir D:\ | findstr victory-work`) before assumin
 `git worktree prune` clears the stale registrations afterwards.
 
 ## Rules that have cost time when broken
+
+- **Nothing may compile during a run.** The Hermes gateway (`hermes_cli.main gateway run`) ran a
+  scheduled `verify-build.sh` that started four `cargo build`s mid-run and made the fixed build read
+  2.3 fps; it respawned them after they were stopped. Before trusting a run: `tasklist` shows no
+  `rustc`/`cargo`, and the submit thread's CPU time (user + kernel in the `usual frame` line) is close
+  to its "at work" time.
 
 - **Verify every claim on disk** (`git show`, `grep`, `ls -l`). Agent results have been fabricated
   repeatedly: a 218-test "pass" for a switch that did not exist, a discarded `merge()`, empty branches.
@@ -206,6 +235,20 @@ threads (card 79 → 66), preparing on its own thread (103 → 75), `VICTORY_THI
 joined (68 → ~63), AVX2 compares of shader-written bytes (14 → 4-7 ms), and guarded stores looked at
 first (69 → ~6 ms of thread time). Its own tree measured **3.5-3.9 fps on this card**, so its figures
 describe a 24 GB RDNA3 and are a map of *mechanisms*, not a promise of numbers here.
+
+## The order of work (from the frame account above)
+
+1. **Zero-copy memory (UMA).** Title graphics memory opened as heaps the GPU uses directly, addresses
+   translated in shaders — xcl's `gpu/uma.rs` design (read only). Removes copies, copy-back and the
+   hash lists: ~65 ms of submit-thread work and 26 ms of card time. `inplace.rs` already has the
+   openings; the copy model (`shadow.rs`, decision 0007) is what goes.
+2. **Cheap now:** build with `target-cpu=native` (AVX2), then fat LTO + 1 codegen unit; stop
+   re-uploading our own copy-back writes (`shadow.rs`, end of `copy_back_with`).
+3. **Then the GPU:** a smaller reported display mode / render scale, and **DLSS in place of the title's
+   FSR** (same inputs; NVIDIA's SDK is closed — settle the GPL-3.0 question before shipping it).
+4. **NVIDIA wave work:** wave64 as a thread group (`wave64-split`), per-lane branching, native quad ops
+   and wave reductions instead of emulated DPP (`lower.rs` `fn dpp`).
+5. **Last:** DLSS Frame Generation, which shows more frames but does not make the game faster.
 
 ## What 30 fps actually requires
 

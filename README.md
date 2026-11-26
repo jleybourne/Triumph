@@ -1,374 +1,120 @@
 <h1 align="center">Triumph</h1>
 
-<p align="center"><b>Running an Xbox Series title natively on Windows — and getting its world<br>
-from 3.4 frames a second to a number worth playing.</b></p>
+<p align="center"><b>An Xbox Series title running natively on Windows, on an NVIDIA card,<br>
+and the work of getting its world to 30 frames a second.</b></p>
 
-**Every figure in this table is one row of [docs/runs.md](docs/runs.md)** — the run history, with the
-conditions, the draw count and the dropped count beside each number, and the reason every rejected idea
-was rejected. Rows are never removed; a rejection is a result.
-
-### Status at a glance
-
-One row per part of the work. The mark on the left is that row's state; the two rightmost columns are
-where it stands **now** — with the numbers actually measured — and what done looks like. Nothing in this
-table is an intention: if a number is there, it came from a run whose log is named at the bottom of this
-page.
-| | status | what it is | now | target |
-|:--:|:--|:--|:--|:--|
-| 🟢 | **Frame rate** | world scene, ~4,500 draws a frame | **7.6 fps median · 8.5 fps best** · 131 ms median / 117.5 best · 348 dropped (was 6.9 · 145.9) | 30 fps |
-| 🟢 | **Shaders** | console RDNA2 programs translated to DXIL | **25,586 / 25,694** · 99.58% | 25,694 / 25,694 |
-| 🟢 | **Stability** | crashes and device removals across every run measured | **0** | 0 |
-| 🟢 | **Pipeline library** | pipelines loaded from disk instead of compiled | **2,495 loaded · 0 compiled** | unchanged |
-| 🔄 | **Copy-back** | shader writes returned to the title's memory | **49.3 ms · 58.5 MB** (was 73.9 · 64.7) | ≤ 20 ms |
-| 🔄 | **Per-draw GPU** | state work the layer issues for each draw | 90.8 ms · ~19.8 µs a draw | ≤ 20 ms total |
-| 🔄 | **The last 108 shaders** | one shape: a masked wave reduction | approximated by `VICTORY_WAVE_MASKED` | exact |
-| ⏳ | **Double-buffered copies** | frame N+1 prepared while frame N draws | 141 ms frame, card 64% busy | ~95 ms → 10.5 fps |
-| ⚠️ | **Dropped draws** | draws lost to pipelines still loading | 344–397 a frame (8% of scene) | 0 |
-| ❌ | **Shadowed areas** | parts of the picture that render black | upstream issue, untouched here | fixed |
-
-### Reading the marks
-
-Shorthand used in the table above and through the rest of this page. **Status** marks say what state a
-thing is in; **confidence** marks say how sure we are of a forecast.
-| mark | means | mark | means |
-|:--:|:--|:--:|:--|
-| ✅ | works, measured | 🟢 | high confidence |
-| ❌ | broken or rejected | 🟡 | medium confidence |
-| ⚠️ | partial | 🔴 | low confidence |
-| 🔄 | in progress | ⏳ | not started |
-
----
-
-A fork of [VIctory](https://github.com/Marvisak/VIctory) — a compatibility layer that runs an Xbox
-Series title natively on Windows, from files the user supplies. This fork tracks upstream `main` and
-exists for one purpose: **make the 3D world run at a playable frame rate on one particular machine,
-without losing picture or correctness.**
+Triumph is a fork of [VIctory](https://github.com/Marvisak/VIctory), a compatibility layer that runs
+an Xbox Series title's own x86-64 code on Windows and supplies everything underneath it: the console's
+system calls, its memory model, and its GPU, translated to Direct3D 12. This fork has one job: **make
+the 3D world playable on one specific PC without losing picture or correctness.**
 
 > [!IMPORTANT]
-> **This repository contains no game files, code or assets.** You need your own copy of the title.
+> This repository contains no game files, code or assets. You need your own copy of the title.
 > Nothing here is affiliated with or endorsed by its developer or publisher.
 
-## Shaders
+## Where it stands
 
-Every GPU program the title ships has to be decoded from the console's RDNA2 form and re-emitted as
-DXIL before the card will run it. This is the count, measured over the title's own shader archive:
+Measured on one machine (i7-10700KF, RTX 4070 Ti 12 GB, 64 GB RAM, Windows 11), world scene,
+diagnostics build, confirmed launch settings. Every row links to its run in
+[docs/runs.md](docs/runs.md).
+
+| | now | target |
+|:--|:--|:--|
+| **Frame rate** | **7.3 fps · 136.6 ms** median, 8.0 fps best ([row 26](docs/runs.md)) | 30 fps |
+| **Scene drawn** | **4,706 draws** a frame, 344 dropped (was 3,962 and ~478) | 0 dropped |
+| **Pipelines refused** | **7** (was 311) | 0 |
+| **Crashes** | 0 in the runs above | 0 |
+| **Resolution** | 2560x1440 scene, upscaled to 3840x2160 | lower scale + better upscaler |
+
+Every result is reported as **fps · ms · draws · dropped** together. A faster frame that draws less
+of the scene is not a win.
+
+## Why it is slow, and what fixes it
+
+The console has one memory that the CPU and the GPU share. A PC does not, so this layer currently
+**keeps a copy of the title's graphics memory on the card and syncs it every frame**: it uploads what
+the title changed, hashes it, and copies back what the GPU wrote. In a ~130 ms frame:
 
 ```
-  25,586 / 25,694  ██████████████████████████████████░░  99.58%
+title's render thread     6 ms of work, then ~68 ms waiting for us in present
+our submit thread         74 ms: copies 23.5 ms (72 MB) + copy-back 42.8 ms (56 MB) + the rest
+the GPU                   idle ~44 ms; of ~71 ms busy, 26 ms is our own hashing, ~45 ms the game
 ```
 
-| stage | translated | of | |
-|:--|--:|--:|--:|
-| vertex + pixel | 14,156 | 14,247 | `█████████████████████████████████░` 99.36% |
-| compute | 2,668 | 2,682 | `█████████████████████████████████░` 99.48% |
-| mesh | 8,762 | 8,765 | `██████████████████████████████████` 99.97% |
+The game is not the bottleneck. Our memory mirroring is. The plan, in order:
 
-The **108 refused** programs are all one shape — a wave reduction over lanes that are not all
-running. They run today with `VICTORY_WAVE_MASKED=1` (approximately); the exact fix is being written
-now and needs each lane's execution mask carried as data. See `docs/per-lane.md`.
+| | step | why |
+|:--:|:--|:--|
+| 1 | **Zero-copy memory**: the GPU works on the title's memory directly | removes ~65 ms of CPU work and 26 ms of GPU work a frame |
+| 2 | **Build tuning**: AVX2 (`target-cpu=native`), link-time optimisation | faster compares and copies, free |
+| 3 | **Lower render scale + DLSS** in place of the title's FSR | once the GPU is the limit, this halves its work |
+| 4 | **NVIDIA wave work**: 64-lane console waves run natively as 32-lane pairs | the last 7 refused pipelines; fewer shader instructions |
+| 5 | **DLSS Frame Generation** | last: smoother, not faster |
 
-## Where we stand now
+## Recent findings
 
-One machine: Windows 11, Intel i7-10700KF, NVIDIA RTX 4070 Ti 12 GB, 64 GB RAM, Series X profile.
-World scene, frames counted only at **1,200 draws or more**, after the load phase settles.
+- **311 pipelines were refused because of an earlier "fix".** The D3D12 debug layer showed the
+  shaders index the sampler heap directly, and the flag allowing that had been removed. Restoring it
+  took refusals from 311 to 7 and the scene from 3,962 to 4,706 draws ([row 26](docs/runs.md)).
+- **`fsrQuality=4` works now.** It was black only because its passes were among the refused
+  pipelines ([row 27](docs/runs.md)). It is no faster yet, because the GPU is not the bottleneck.
+- **Measurements need a quiet machine.** A background build during one run made the same build read
+  2.3 fps instead of 7.3. Runs are only trusted with nothing compiling.
 
-| build | draws | fps | ms a frame | dropped |
-|---|---|---|---|---|
-| **release** | 4,710 | **7.7** | **130.0** | 348 |
-| diagnostics | 4,525 | 6.9 | 145.9 | 356 |
-| diagnostics · 960×540 internal | 4,579 | 7.3 | 140.9 | 344 |
-| menus | 8–32 | 30.0 | 33.3 | 0 |
+What has been tried and rejected, and why, is kept in [docs/runs.md](docs/runs.md) so nothing is
+paid for twice.
 
-Since the first measurement this session the tree has gone from **3.4 fps / 295 ms** (hand-merged
-base) to **7.7 fps / 130 ms** — a 2.3× frame-rate gain and a 37% cut in cost per draw
-(0.051 ms → 0.032 ms), almost all of it from adopting upstream's base and its measured switch set.
+## Running it
 
-## What a frame is made of
+Requirements: Windows 10/11 x64, a CPU with AVX2, a Direct3D 12 GPU with shader model 6.6 and mesh
+shaders, Rust (pinned in `rust-toolchain.toml`), and several GB of free Windows commit.
 
-| part | ms | what it actually is |
-|---|---|---|
-| the card, busy | 90.8 | ~19.8 µs of GPU work per draw |
-| preparing | 95.0 | includes copies: 75.4 ms moving 114.9 MB in **11,542 copies** |
-| copying back | 73.9 | 64.7 MB at 0.88 GB/s |
-| pipeline passes | 55.2 | 2,495 pipelines **loaded** from library, none compiled |
-
-These overlap into the 130–141 ms frame. Two facts organise everything below:
-
-- **The card is only 64% busy**, so the frame is longer than either half; perfect overlap alone
-  would give ~95 ms (10.5 fps).
-- **The card is not fill-rate bound**: rendering at a quarter of the pixels saves 4%.
-
-## What's working
-
-✅ **The world renders and is playable.** Full scene draws at 4,500–6,900 draws a frame.
-✅ **Shader coverage 99.58%** (see [Shaders](#shaders)). The 108 refused programs are one shape and
-  `VICTORY_WAVE_MASKED=1` runs them approximately.
-✅ **No crashes or device removals** in the runs measured here (0 faults across every run measured).
-✅ **Load → world pipeline library** works: 2,495 pipelines loaded, **0 compiled** per run.
-✅ **Diagnostics are trustworthy now**: GPU-busy, per-copy counts, descriptor-sync timing, and a
-  per-program instruction census (1,433 programs × 26 instruction kinds).
-
-## What isn't working
-
-| | problem | measured cost | state |
-|---|---|---|---|
-| ❌ | Per-copy overhead in host copies | **63 ms** of a 141 ms frame | understood, fix measured as ineffective |
-| 🔄 | Copy-back throughput | 73.9 ms at 0.88 GB/s | fix wired in production, **unmeasured** |
-| 🔄 | GPU per-draw cost | 90.8 ms total, ~19.8 µs/draw | three dedup fixes written, **unmeasured** |
-| ⚠️ | 356 draws dropped per frame | 8% of the scene | caused by pipelines not ready |
-| 🔄 | The last 108 shaders | 0.42% of programs | exact fix in progress (per-lane model) |
-| ❌ | Shadowed areas render black | — | upstream issue, untouched here |
-
-## Findings
-
-1. **A frame rate alone is not a measurement.** Frames that drop draws look faster because the
-   scene is smaller: the "9 fps" seen early on was a 744-draw frame that dropped 522, against a
-   full scene of ~4,500. Every number here is reported as fps · ms · draws · dropped.
-2. **A 300-second run cannot measure this title.** The world spends minutes in pipeline loads;
-   measurement starts after the spikes settle, so runs are 600 s.
-3. **The GPU figure was invisible, not zero.** Under async submission the old frame line read
-   `0.0 on the GPU`; the card clock shows **90.8 ms**. The card is nearly two thirds of the frame.
-4. **The copy path is overhead-bound, not bandwidth-bound.** 11,542 copies averaging 10.2 KB cost
-   6.53 µs each, where the bytes alone are 1.04 µs — **5.5 µs of overhead per copy**.
-5. **The 11,542 copies are one per distinct buffer**, not adjacent spans, so joining neighbours
-   cannot help (measured: copy count unchanged).
-6. **The arithmetic in translated shaders is not waste.** `arith` is 44.6% of instructions and
-   provably 0% redundant; the kinds divergence work removes are 16.5%, and `guard_select`, the one
-   per-lane EXEC branches would replace, is 0.64%.
-7. **Cost is concentrated**: the top 100 programs carry 35.7% of all instructions, and the top ten
-   are all compute programs of ~49,000 instructions.
-
-## Investigations, and what they ruled out
-
-| tried | result | verdict |
-|---|---|---|
-| Adopt upstream base + its measured switch set | 3.4 → 6.9 fps | ✅ **adopted** |
-| `VICTORY_HEAP_SYNC_TABLES=1` (narrower heap scan) | 6.0 fps / 167 ms | ❌ rejected — slower |
-| `VICTORY_MERGE_RUNS` (join contiguous copy ranges) | copy count unchanged | ❌ rejected |
-| `VICTORY_COPY_MERGE` (join runs of adjacent copies) | 11,336–11,795 vs 11,542 | ❌ rejected — not adjacent |
-| 960×540 internal (`VICTORY_DISPLAY_MODE`) | +4% | ❌ rejected — not fill-rate |
-| Identity-element shortcut for refused shaders | covers 0 of 108 (all are sum) | ❌ rejected — proven empty |
-| Per-lane divergence work as a frame-rate lever | caps out at 16.5% of instructions | ⚠️ deprioritised for speed, kept for coverage |
-| Zero-copy / resident heaps (study only) | the only route to 33 ms GPU-side | ⚠️ deferred, large |
-
-## What we're working on
-
-1. 🔄 **Copy-back span merge** — written and wired in the production path (gap ≤ 64 bytes, in-flight
-   ranges fall back), **measurement pending**. Target: 73.9 ms → 20–30 ms.
-2. 🔄 **Per-draw state dedup** — three switches: skip already-bound target/depth transitions, dedupe
-   repeated root-argument and descriptor-table sets, rebind vertex buffers only on change.
-   Estimated 12–24 µs per draw against a ~19.8 µs budget. **Measurement pending.**
-3. 🔄 **Exact translation of the last 108 shaders** (`VICTORY_EXEC_DATA`) — carry each lane's EXEC
-   mask as data and if-convert the divergent region, so a reduction no longer needs lanes to be
-   co-resident. Acceptance: a numeric test that matches hand-computed console results.
-4. ⏳ **Double-buffering the host copies** — so frame N+1 prepares while frame N draws. Target:
-   141 → ~95 ms (10.5 fps) with no GPU change.
-
-## What we think we can achieve
-
-Honest arithmetic from the measurements above, not optimism:
-
-| milestone | frame | fps | confidence |
-|---|---|---|---|
-| copy-back + per-draw dedup land and measure well | ~95–110 ms | **9–10.5** | 🟢 high |
-| + double-buffering (perfect overlap) | ~85–95 ms | **10.5–12** | 🟡 medium |
-| + deeper per-draw GPU work (state, tables, shaders) | ~55–65 ms | **15–18** | 🟡 medium — the GPU must halve |
-| 30 fps | 33 ms | **30** | 🔴 **low — needs the GPU's 90.8 ms to fall ~4×** |
-
-**Timeframe, on one developer plus agent assistance:** the three host-side items (1, 2, 4) are days
-of work each and carry the frame to ~10–12 fps. The GPU per-draw reduction is 1–2 weeks of
-iterative measurement. **30 fps is not a schedule item yet** — it depends on a per-draw mechanism
-that has been measured (20 µs/draw) but not yet found a lever, and it would additionally need the
-per-lane model or a comparable cut in emitted instructions.
-
-## Reproducing a measurement
-
-```bash
-# build
-export PATH="$HOME/.cargo/bin:$PATH"
-cargo build --profile diag --features diagnostics -p victory --target-dir target/vd3
-cargo build --release -p victory
-
-# run (600 s: the world needs minutes to settle past the pipeline loads)
-run-fx.ps1 -Diag -Seconds 600        # diagnostics, prints the full frame line
-run-fx.ps1 -Seconds 600              # release, the playable number
-
-# read a run
-#   log: victory-run-<time>.log.err
-#   keep frames with draws >= 1200, and report fps · ms · draws · dropped together
-#   counters that matter: copies made in place (count, MB), copying back (ms, MB),
-#   GPU busy ms, passes ms, dropped without a host pipeline
+```powershell
+copy victory.example.toml victory.toml        # set your game and data paths (outside the repo)
+cargo test --workspace                        # needs no game data
+cargo run -p victory -- config                # check your paths
+cargo build --profile diag --features diagnostics -p victory
+target\diag\victory.exe run <game dir>\<the title's exe> --execute
 ```
 
-Switches used for the numbers above: `VICTORY_ASYNC_SUBMIT=1 VICTORY_QUEUE2=1
-VICTORY_INDIRECT_WINDOW=1 VICTORY_TEXTURE_NO_WAIT=1 VICTORY_MERGE_GAP=64 VICTORY_MERGE_RUNS=4096
-VICTORY_STAGING_POOL=0 VICTORY_COPY_PLAIN=1 VICTORY_JOIN_PARTS=1 VICTORY_BACK_OWN_VIEW=1
-VICTORY_INDIRECT_GATHER=1 VICTORY_CARD_REHASH_RUNS=1 VICTORY_CARD_WINDOWS_MB=2048
-VICTORY_CARD_BUFFERS_MIN_KB=64 VICTORY_CARD_BUFFERS_MB=1280 VICTORY_TEXTURE_BACK=1
-VICTORY_CARD_HASH_LEN=1 VICTORY_FILLS_PLAIN=1 VICTORY_STEP_INDEX=1`
+The window caption shows the frame rate. With no pad connected, the keyboard acts as one:
+W A S D / I J K L sticks, arrows D-pad, Enter / Backspace / X / Y face buttons, Q / E shoulders,
+Z / C triggers, Esc / Tab Menu / View.
+
+Useful diagnostics switches (diagnostics builds only):
+
+| variable | effect |
+|:--|:--|
+| `VICTORY_D3D12_DEBUG=1` | D3D12 debug layer; names why a pipeline or command is rejected |
+| `VICTORY_D3D12_DRED=1` | on a GPU fault, what was running |
+| `VICTORY_CAPTURE=<dir>` | saves presented frames |
+| `VICTORY_LOG=<target>=debug` | more logging |
+
+The full list is in upstream's README.
 
 ## Documentation
 
-- `docs/frame-budget.md` — the measurements, the traps that produced wrong numbers, and the rules
-  that keep them honest.
-- `docs/shader-cost.md` — the instruction census: what translated programs cost and where.
-- `docs/pipeline-stalls.md` — why the world stalls on pipeline *loads* and not compiles.
-- `docs/per-lane.md` — why the last refusals need a model change, not a patch.
+| file | what it holds |
+|:--|:--|
+| [CLAUDE.md](CLAUDE.md) | the working handoff: measured state, blockers, rules, order of work |
+| [docs/runs.md](docs/runs.md) | every measured run, including the rejected ones and why |
+| [docs/settings.md](docs/settings.md) | the title's own settings file and what each change measured |
+| [docs/per-lane.md](docs/per-lane.md) | the wave64 / per-lane translation problem |
+| [docs/architecture.md](docs/architecture.md) | how the layer is put together |
 
 ## Credits
 
-- **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak and its contributors is the base of
+- **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak and contributors is the base of
   everything here: loader, runtime services, the Direct3D 12 back end, the shader recompiler.
-  GPL-3.0-or-later, so is this fork. Upstream's history is kept intact below.
-- **[XCL](https://github.com/ivall/xcl)** by ivall and its contributors (GPL-2.0-only) — reference
-  for how the title behaves under another layer. Fixes inspired by it were written anew here.
-- The guard over every view of a memory page is code by **myokex** (victory-amd, commit `c6dc4d8`),
-  adapting pull request #115 by Spexivus, its correction by joroyt and part of VIctory #1122 by
-  tightfall. The read-beside fix for kernel reads is by **Joshua Odom** (commit `10ea38e`).
-- Parts of this fork's work were developed with [Claude Code](https://claude.com/claude-code) and
-  with Hermes Agent subagents; every change in this README was measured on the machine described.
+- **[XCL](https://github.com/ivall/xcl)** by ivall and contributors is a design reference: its unified
+  memory and wave64-on-wave32 designs. XCL is GPL-2.0-only and this fork is GPL-3.0, so its ideas
+  are reimplemented here, never copied.
+- The guard over every view of a memory page is by **myokex** (victory-amd `c6dc4d8`), adapting
+  pull request #115 by Spexivus, its correction by joroyt and part of VIctory #1122 by tightfall. The
+  read-beside fix for kernel reads is by **Joshua Odom** (`10ea38e`).
+- Developed with [Claude Code](https://claude.com/claude-code) and Hermes Agent. Figures on this page
+  were measured on the machine described, not estimated.
 
 ## License
 
-GPL-3.0-or-later, inheriting VIctory's licence. See `LICENSE`.
----
-
-> Upstream's README follows, kept intact for reference.
-
-# VIctory
-
-Runs the title (Xbox Series X|S) natively on Windows, from files
-the user supplies.
-
-The title's x86-64 code runs unchanged inside our process; VIctory supplies
-the platform underneath it and converts the title's data, ahead of time where
-it can and on first use where it must (shaders). See
-[docs/architecture.md](docs/architecture.md).
-
-## Status (2026-11-23)
-
-**Not playable yet.** The title boots, runs its menus at its own 30 fps and
-loads the world, where rendering fails.
-
-| Stage | State |
-|-------|-------|
-| Boot, first-boot screens (accessibility, language, settings, legal) | works, 30 fps |
-| Intro video with sound | works |
-| Start screen, profile and saves | works |
-| Loading into the world (about 50 s) | works |
-| The world (first mission's intro) | reached and runs with indirect draws; its title card renders, the scene after it is still dark; 0.5-1.8 s per frame |
-
-Tested on one machine: Windows 11, AMD RX 6700 XT.
-
-> **Warning.** Entering the world on a real GPU can currently hang it, and
-> Windows then resets the display driver (every monitor goes black for a
-> moment). To look further, use a diagnostics build with
-> `VICTORY_D3D12_WARP=1`, which renders on the software adapter.
-
-What each part does today and what it still needs:
-
-| Subsystem | Today | Needs |
-|-----------|-------|-------|
-| Loader | Runs the title's executable and its DLLs in our process; crash reports name the faulting code and are kept in `crashes.log` | – |
-| Runtime services | One signed-in offline user, licences, packages, saves that survive a kill at any step, text entry dialog | Speech is silent; the dialog and relaunch are untested live |
-| Network | Offline by design: the title cannot reach the network | – |
-| Files and streaming | Archives and streamed data read, zlib and BCPack decoded in parallel | Loading is limited by writes into title memory |
-| Input | XInput pads, keyboard, keyboard stand-in pad | Trigger rumble |
-| Audio | Menu, video and loading sound; XMA voices and Opus streams decode | Reverb is silent; Opus results unverified against the title |
-| GPU: menus | Draws, compute and presentation on host D3D12; only changed title memory is copied | Frame pacing drifts on one screen in release builds |
-| GPU: world | Mesh pipelines, shader-written buffers, descriptor lifetimes, indirect execution (arguments clamped), pipelines made by worker threads and kept on disk | Most of the scene is still missing (untranslated shaders drop draws); frames take seconds; real queries, depth bounds, HDR and scaling are missing |
-| Shaders | Console GPU code recompiled to DXIL at first use, cached on disk. Menus: all. World: mesh 8,191 of 8,506, vertex/pixel 10,617 of 12,346, compute 1,643 of 2,539 | 64-bit image atomics, merged geometry stages, the ray-tracing builder's shaders; some compute programs need a GPU with 64-lane waves |
-| Textures | Console tiled layouts and detiling for the modes the title uses | Render-target metadata planes |
-| Series S mode | Runs through the menus to the loading screen | The world, as above |
-
-## Getting started
-
-Requirements: Windows 10/11 x64, a CPU with AVX2, a Direct3D 12 GPU with
-shader model 6.6 (and mesh shaders for the world), Rust (pinned in
-`rust-toolchain.toml`).
-
-The title also needs several GiB of available Windows commit at startup.
-Check **Committed** under **Task Manager → Performance → Memory**. If
-`crashes.log` reports Windows error 1455, close other applications or increase
-the Windows paging file size, then retry.
-
-```powershell
-cargo xtask install-hooks                # asset-policy check on every commit
-copy victory.example.toml victory.toml   # then set your paths (outside the repo)
-cargo test --workspace                   # needs no game data
-cargo run -p victory -- config           # check your paths
-```
-
-Run the title:
-
-```powershell
-cargo build --release -p victory
-target\release\victory.exe run <game dir>\<the title's exe> --execute
-```
-
-The window caption shows the framerate. Saves, settings and `crashes.log`
-are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
-data under the cache folder.
-
-Input: XInput pads. With none connected the keyboard is a pad while the
-title's window has focus:
-
-| Keys | Pad |
-|------|-----|
-| W A S D / I J K L | left / right stick |
-| arrows | D-pad |
-| Enter, Backspace, X, Y | A, B, X, Y |
-| Q / E, Z / C | shoulders, triggers |
-| F / H | stick clicks |
-| Esc, Tab | Menu, View |
-
-## Commands
-
-```
-victory inspect <exe|dll> [--imports] [--exports]
-victory census [paths...] [--missing] [--strict]
-victory lib-exports <import.lib> [--list]
-victory shader-info [paths...] [--verbose] [--disasm]
-victory translate [paths...] [--validate] [--pipelines] [--list] [--jobs N]
-victory run <exe> [--execute] [--unimplemented trap|zero] [--strict]
-            [--console series-x|series-s] [-- <title arguments>]
-victory config
-```
-
-Logging: `VICTORY_LOG=victory_loader=trace,info` (a release build logs
-info and above).
-
-## Debugging
-
-A release build has no debugging aids. Build them in with
-
-```powershell
-cargo build --profile diag -p victory --features diagnostics   # target\diag\victory.exe
-```
-
-| Variable | Effect |
-|----------|--------|
-| `VICTORY_LOG=<target>=debug,...` | debug and trace output |
-| `VICTORY_STACKS=20,60` | every thread's stack at those seconds |
-| `VICTORY_WATCH=<rva>,...` | logs a title u32 when it changes |
-| `VICTORY_KEYS=30:Enter,35:X` | presses keys at those seconds, focus or not |
-| `VICTORY_CRASH_SAVE=<rva>:<len>,...` | saves title memory to the cache folder on a crash |
-| `VICTORY_CAPTURE=<dir>` | saves presented frames (powers of two, or `VICTORY_CAPTURE_FRAMES=<list>`) |
-| `VICTORY_DUMP_TARGETS=1` | with the two above, saves every render target of those frames |
-| `VICTORY_D3D12_DEBUG=1` | host debug layer |
-| `VICTORY_D3D12_GBV=1` | with the above, GPU-based validation (bad descriptor use reported, not faulted; slow) |
-| `VICTORY_D3D12_DRED=1` | on a GPU failure, the allocation hit and the commands in flight |
-| `VICTORY_PIPELINE_WAIT_MS=24` | reduce the per-frame wait for background pipeline creation from the default of 500 ms. A draw can be omitted until its pipeline is ready |
-| `VICTORY_SKIP_PIPELINES=<hash>,...` | omit draws and dispatches, including indirect ones, whose pipeline contains a listed 16-digit shader hash |
-| `VICTORY_GPU_TIMING=1` | with the above, each list of a submission run and timed on its own; slow lists logged with their slowest commands |
-| `VICTORY_D3D12_WARP=1` | host device on the software adapter (slow; cannot reset the driver) |
-| `VICTORY_SHADER_LOOP_LIMIT=<n>` | translated shader loops stop after `n` iterations per lane instead of 2^20 (own shader cache entries); if a lower `n` makes world frames much faster, loops hitting the limit are what makes them slow |
-| `VICTORY_AUDIO_CAPTURE=<file.wav>` | records what the title plays (our process only) |
-| `VICTORY_XMA_DUMP=<dir>` | saves the first 32 XMA voices' context and input |
-
-Every build appends crashes and host GPU failures to `crashes.log` in the
-title's data folder.
-
-## License
-
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+GPL-3.0-or-later, as VIctory. See [LICENSE](LICENSE).
