@@ -26,7 +26,7 @@ listed at the end of the README.
 | 12 | integrated: per-draw dedup + copy-back merge | **33** | — | — | — | 0.0 | 18 / 0.3 MB | — | ❌ never reached the world — one of the four switches stalls loading; bisecting |
 | 13 | per-draw dedup only (copy-back merge off) | **13** | — | — | — | — | — | — | ❌ still never reached the world — the dedup switches themselves stop the scene loading |
 | 14 | **control**: integrated build, all four switches off | 4,940 | 6.7 | 148.9 | 354 | — | — | — | ✅ the build is sound — within variance of #4 and drawing more; the harm is the switches, not the code |
-| 15 | `VICTORY_INPLACE=2 VICTORY_INPLACE_MORE=1` (zero-copy title buffers) | 4,873 | 3.0 | 334.8 | 347 | — | 11,260-11,618 / 231-260 MB | — | ❌ it loads, and nearly doubles the copy volume: copies 146.4 ms against 75.4, frame 334.8 against 145.9 |
+| 15 | `VICTORY_INPLACE=2 VICTORY_INPLACE_MORE=1` (zero-copy title buffers) | 4,851 | 7.0 | 142.6 | 346 | — | **6,460 / 187.4 MB** | — | ⚠️ neutral: copy count halves but bytes rise 63%, frame 142.6 against 145.9 — inside variance. It loads, unlike most of tonight's changes. (An earlier reading of 334.8 ms from this run was taken mid-load and is not the settled figure.) |
 
 ## What a row must contain
 
