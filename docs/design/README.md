@@ -12,6 +12,10 @@ begins.
 
 | | design | what it changes | expected | effort | status |
 |:--:|:--|:--|:--|:--|:--:|
+| 🧮 | [**Card time budget**](card-budget.md) | Where the card's ~80 ms a frame goes and how to cut it | wide card hash est. −24 to −30 ms card; clamp/barrier batching −6 to −12 | days–weeks | 🔄 building |
+| 🧵 | [**Splitting the submit thread**](submit-split.md) | Present ticket, wide prepare, send thread, list digests | est. −30 to −60 ms submit combined (overlapping) | days | 🔄 building |
+| 🧾 | [**Recording cost**](recording-cost.md) | Recorder locks, dedupe bugs, bind elision, constant buffers in place (port 5) | est. −8 to −15 ms in the control | days | 🔄 building |
+| 🛡️ | [**Cheaper write tracking**](tracking-cost.md) | Guard epochs, one guard pass per submission, hot blocks, page-kind map | est. −10 to −12 ms combined | days | 🔄 building |
 | 🧠 | [**Zero-copy memory (UMA)**](uma.md) | Title memory used by the GPU directly, so the per-frame copy, hash and copy-back machinery goes | −35 to −65 ms submit thread, −20 ms card; ends card-bound at ~50–55 ms | weeks | ⏳ next big item |
 | 🖼️ | [**DLSS in place of FSR**](dlss.md) | Hook the title's FidelityFX loader (5 exports) and drive DLSS from the same inputs | GPU time down 10–20 ms in performance mode; little fps until zero-copy lands | days | ⏳ after UMA |
 | ⚡ | [**Per-lane and native wave ops**](per-lane.md) | Native quad ops, folded lane indices, reduction ladders and flat regions in the translator | a few ms of card time; settles the 4–8× question first | weeks, staged | ⏳ |

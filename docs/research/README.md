@@ -15,6 +15,10 @@ disagree, the disagreement is listed below rather than smoothed over.
 
 | | report | question it answers | headline |
 |:--:|:--|:--|:--|
+| 🧭 | [**Coherency prior art**](coherency-prior-art.md) | How do other emulators keep CPU and GPU memory in step without stalls? | GPU-side copies for GPU-written sources; per-buffer GPU-modified range lists instead of hashing; lazy readback; ReBAR upload heaps. |
+| 🧭 | [**Native paths, deeper**](native-paths-2.md) | Would running more natively (HLE, recompiling, asset conversion) win big? | CPU code is already native, so recompiling gains ~0; the big lever is card-authoritative memory (est. 40–90 ms, weeks). |
+| 🧭 | [**GPU-driven commands**](gpu-driven.md) | Can the card or new APIs take the command work off the CPU? | Most cost is translation work around calls (~3.3 µs/call), not the calls; parallel/pipelined translation and bindless lead; Vulkan not worth a port. |
+| 🧭 | [**Frame generation and pacing**](framegen.md) | What bridges 15–20 real fps to a steady 30 displayed? | Open-source interpolation once real fps ≥ ~16; a steady presenter first. Generated frames "look like 30", not "feel like 30". |
 | 🎯 | [**Path to 60 and 120 fps**](path-to-60-and-120.md) | What beyond the current plan gets us to 60, then 120? | Overlapping the title's frame with ours (`VICTORY_ASYNC_PRESENT`) is the biggest untested lever. On this card, the GPU is the wall at ~45 ms even after all planned work. |
 | 🧮 | [**Native 60 fps on the GPU**](native-60-gpu.md) | Why does the title's GPU work cost ~45 ms here, and how is it recovered without upscaling? | The "3× less efficient" premise is soft (closer to 1.65× for this integer-heavy code). Cost is a flat tail of ~1,290 kinds of work. The biggest card-side cost is the structure around indirect draws and dispatches. |
 | 🧩 | [**Running parts natively**](native-paths.md) | What could bypass emulation instead of speeding it up? | No PC shaders or PC build ship with the title, so translation stays. The real bypasses are memory living on the card, the upscaler hook, and GPU-side texture detiling. |
