@@ -536,6 +536,18 @@ impl HostPipeline {
             let pso = match made {
                 Ok(pso) => pso,
                 Err(e) => {
+                    // What the card was actually offered, so a refusal names its
+                    // cause instead of only its error: the bytecode length, the
+                    // root signature's size, and whether either is empty.
+                    let c = code(0);
+                    tracing::warn!(
+                        error = %e,
+                        ?shaders,
+                        cs_len = c.BytecodeLength,
+                        cs_null = c.pShaderBytecode.is_null(),
+                        root_sig_len = root_blob.len(),
+                        "compute pipeline refused, description follows"
+                    );
                     tracing::warn!(error = %e, ?shaders, "host pipeline refused");
                     host.log_messages();
                     return None;
@@ -946,9 +958,19 @@ fn root_signature(
                 pParameters: params.as_ptr(),
                 NumStaticSamplers: samplers.len() as u32,
                 pStaticSamplers: samplers.as_ptr(),
-                Flags: input
-                    | D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
-                    | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED,
+                // D3D12 forbids static samplers in a root signature carrying
+                // D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED. A shader
+                // that declares samplers is given static ones by this layer, so the
+                // flag must go or creation fails with E_INVALIDARG (0x80070057) -
+                // four compute pipelines, about 350 draws a frame. It is set only
+                // when the signature has no static samplers to conflict with.
+                Flags: if samplers.is_empty() {
+                    input
+                        | D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
+                        | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED
+                } else {
+                    input | D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
+                },
             },
         },
     };

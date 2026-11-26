@@ -156,12 +156,25 @@ pub(crate) fn place_part(device: &ID3D12Device, start: u64, len: u64) -> Result<
 /// Title memory `[start, start + len)` in place, for a window outside
 /// buffers or a title buffer, if [`level`] asks for it and the memory can
 /// be opened; `None` leaves the caller to make a copy, as before.
+/// Whether view memory may be placed (`VICTORY_INPLACE_VIEW=1`; off by default).
+fn place_view() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_INPLACE_VIEW").is_some_and(|v| v == "1"))
+}
+
 pub(crate) fn place_for(start: u64, len: u64, window: bool) -> Option<Placed> {
     if level() < if window { 1 } else { 2 } {
         return None;
     }
     // View memory: known from the runtime without asking Windows.
-    if cover(start as usize, len as usize) != Cover::None {
+    //
+    // Refused by default because such memory was a reserve section, which the
+    // heap call will not open. With `VICTORY_XMEM_COMMIT=1` those sections are
+    // committed instead, so they can be placed - and placing them removes the
+    // copy-back as well as the copy, which is where the second half of the
+    // frame's memory traffic goes. `VICTORY_INPLACE_VIEW=1` allows the attempt;
+    // the placement still fails harmlessly if the memory cannot be opened.
+    if cover(start as usize, len as usize) != Cover::None && !place_view() {
         STATS[4].fetch_add(1, Ordering::Relaxed);
         return None;
     }
