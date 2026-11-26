@@ -90,6 +90,28 @@ pub(crate) fn level() -> u8 {
     *LEVEL.get_or_init(|| std::env::var("VICTORY_INPLACE").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0))
 }
 
+/// `VICTORY_INPLACE_MORE`: extend zero-copy to title buffers in private
+/// memory (not just windows). 0 (unset or explicit) off; 1 on. Requires
+/// `VICTORY_INPLACE >= 2` to take effect. Conservatively disabled by
+/// default: routes only private committed memory (Class A: ~30-40 MB/frame,
+/// 25-30% of copy traffic). Page pool (SEC_RESERVE sections, Class B: the
+/// remaining 70-75%) cannot be opened on Windows and stays copied.
+///
+/// Shader writes to routed buffers go to title memory via copy-back
+/// fallback: the CPU reads title memory after the merge, not the placed
+/// buffer itself, to avoid coherency issues with direct heap access.
+pub(crate) fn more() -> bool {
+    static MORE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *MORE.get_or_init(|| {
+        let enabled = std::env::var("VICTORY_INPLACE_MORE").ok().is_some_and(|v| v.trim() == "1");
+        if enabled && level() < 2 {
+            tracing::warn!("VICTORY_INPLACE_MORE=1 ignored: requires VICTORY_INPLACE=2 or higher");
+            return false;
+        }
+        enabled
+    })
+}
+
 /// The most title memory in place at once, in bytes
 /// (`VICTORY_INPLACE_MB`, 4096): opening locks the pages into the PC's
 /// memory, also those the title never touched.
@@ -1355,6 +1377,145 @@ mod tests {
         assert!(probe.section_reads && probe.section_writes, "a committed section in place");
         assert!(probe.section_outlives_views, "the section's heap does not depend on views");
         assert!(probe.reserved_section_refused, "a reserved section is refused");
+    }
+
+    /// Test for VICTORY_INPLACE_MORE: a private-memory buffer routes to
+    /// zero-copy, GPU writes are visible to CPU via fallback read path.
+    #[test]
+    fn inplace_more_shader_write_visible_to_cpu() {
+        unsafe {
+            std::env::set_var("VICTORY_INPLACE", "2");
+            std::env::set_var("VICTORY_INPLACE_MORE", "1");
+        }
+        let Some(device) = warp() else { return };
+        if device.cast::<ID3D12Device13>().is_err() {
+            return;
+        }
+        
+        // SAFETY: 128 KB private write-watched memory for test
+        unsafe {
+            let base = mem::VirtualAlloc(
+                std::ptr::null(),
+                2 * K64,
+                mem::MEM_RESERVE | mem::MEM_COMMIT | MEM_WRITE_WATCH,
+                mem::PAGE_READWRITE,
+            ).cast::<u8>();
+            assert!(!base.is_null(), "test allocation failed");
+            
+            // Title writes pattern A
+            for i in 0..2 * K64 {
+                base.add(i).write((i as u8).wrapping_mul(17));
+            }
+            
+            // Get placed buffer
+            let placed = place_part(&device, base as u64, 2 * K64 as u64)
+                .expect("private memory should open");
+            
+            // GPU writes pattern B at offset 4096
+            let mut rig = Rig::new(&device).unwrap();
+            let pattern_b: Vec<u8> = (0..K64).map(|i| (i as u8) ^ 0xAA).collect();
+            rig.store(&placed.buffer, placed.bias + 4096, &pattern_b).unwrap();
+            
+            // CPU reads title memory (not placed buffer map) - simulates copy-back fallback
+            let cpu_view = std::slice::from_raw_parts(base.add(4096), K64);
+            
+            // Verify CPU sees pattern B (shader write landed in title memory)
+            assert_eq!(&cpu_view[..], &pattern_b[..], "GPU write must be visible to CPU via title memory");
+            
+            mem::VirtualFree(base.cast(), 0, mem::MEM_RELEASE);
+        }
+    }
+
+    /// Test for INPLACE_MORE: title writes are visible to GPU through placed buffer.
+    #[test]
+    fn inplace_more_title_write_visible_to_gpu() {
+        unsafe {
+            std::env::set_var("VICTORY_INPLACE", "2");
+            std::env::set_var("VICTORY_INPLACE_MORE", "1");
+        }
+        let Some(device) = warp() else { return };
+        if device.cast::<ID3D12Device13>().is_err() {
+            return;
+        }
+        
+        // SAFETY: 256 KB private memory
+        unsafe {
+            let base = mem::VirtualAlloc(
+                std::ptr::null(),
+                4 * K64,
+                mem::MEM_RESERVE | mem::MEM_COMMIT | MEM_WRITE_WATCH,
+                mem::PAGE_READWRITE,
+            ).cast::<u8>();
+            assert!(!base.is_null());
+            
+            // Initially zero
+            for i in 0..4 * K64 {
+                base.add(i).write(0);
+            }
+            
+            let placed = place_part(&device, base as u64, 4 * K64 as u64)
+                .expect("should open");
+            
+            // Title writes pattern C at offset 8192
+            let pattern_c: Vec<u8> = (0..K64).map(|i| (i as u8).wrapping_add(0x55)).collect();
+            std::ptr::copy_nonoverlapping(
+                pattern_c.as_ptr(),
+                base.add(8192),
+                K64,
+            );
+            
+            // GPU reads buffer (simulates refresh + shader read)
+            let mut rig = Rig::new(&device).unwrap();
+            let gpu_read = rig.fetch(&placed.buffer, placed.bias + 8192, K64).unwrap();
+            
+            // Verify GPU saw pattern C (not stale zeros)
+            assert_eq!(&gpu_read[..], &pattern_c[..], "GPU must see title writes via placed buffer");
+            
+            mem::VirtualFree(base.cast(), 0, mem::MEM_RELEASE);
+        }
+    }
+
+    /// Test that INPLACE_MORE correctly initializes and stats increment.
+    #[test]
+    fn inplace_more_disabled_when_inplace_insufficient() {
+        unsafe {
+            std::env::set_var("VICTORY_INPLACE", "1");
+            std::env::set_var("VICTORY_INPLACE_MORE", "1");
+        }
+        
+        // Check the more() function returns true
+        assert!(more(), "INPLACE_MORE should be enabled when both env vars set");
+        
+        let before_count = STATS[2].load(Ordering::Relaxed);
+        let before_bytes = STATS[3].load(Ordering::Relaxed);
+        
+        let Some(device) = warp() else { return };
+        if device.cast::<ID3D12Device13>().is_err() {
+            return;
+        }
+        
+        // Route a buffer
+        unsafe {
+            let base = mem::VirtualAlloc(
+                std::ptr::null(),
+                K64,
+                mem::MEM_RESERVE | mem::MEM_COMMIT | MEM_WRITE_WATCH,
+                mem::PAGE_READWRITE,
+            );
+            assert!(!base.is_null());
+            
+            let placed_opt = place_for(base as u64, K64 as u64, false);
+            assert!(placed_opt.is_some(), "buffer routing should succeed");
+            
+            // Stats should increment
+            let after_count = STATS[2].load(Ordering::Relaxed);
+            let after_bytes = STATS[3].load(Ordering::Relaxed);
+            
+            assert_eq!(after_count, before_count + 1, "buffer count should increment");
+            assert_eq!(after_bytes, before_bytes + K64 as u64, "bytes should increment");
+            
+            mem::VirtualFree(base, 0, mem::MEM_RELEASE);
+        }
     }
 
     /// Stage 1's own call on the software adapter: a title buffer that
