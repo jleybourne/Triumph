@@ -4,9 +4,9 @@
 from 3.4 frames a second to a number worth playing.</b></p>
 
 <p align="center">
-  <b>7.7 fps</b> · 130 ms a frame · 4,710 draws a frame &nbsp;|&nbsp;
-  <b>25,586 / 25,694</b> shaders translate &nbsp;|&nbsp;
-  target <b>30 fps</b>
+  🎮 <b>7.7 fps</b> &nbsp;·&nbsp; ⏱️ 130 ms a frame &nbsp;·&nbsp; 🧱 4,710 draws a frame
+  &nbsp;|&nbsp; 🧩 <b>25,586 / 25,694</b> shaders translate
+  &nbsp;|&nbsp; 🎯 target <b>30 fps</b> &nbsp;|&nbsp; 🟢 host work &nbsp; 🔴 GPU per-draw is the barrier
 </p>
 
 <p align="center">
