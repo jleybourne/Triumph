@@ -976,7 +976,7 @@ fn uav_barrier() -> D3D12_RESOURCE_BARRIER {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_12_0;
@@ -984,6 +984,13 @@ mod tests {
     use windows::Win32::Graphics::Dxgi::*;
     use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
     use windows::core::Interface;
+
+    /// Serialize WARP tests (the software adapter is single-threaded).
+    pub(crate) fn warp_turn() -> std::sync::MutexGuard<'static, ()> {
+        static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        TURN.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
 
     const WORKER_CS: &str = r#"
 #define RS "UAV(u0)"
