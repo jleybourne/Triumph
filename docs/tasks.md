@@ -2,48 +2,69 @@
 
 <p align="center"><i>What was done, what it measured, and what is next.</i></p>
 
-<p align="center"><a href="../README.md">← Back to Triumph</a> · <a href="research/README.md">Research</a> · <a href="design/README.md">Designs</a></p>
+<p align="center"><a href="../README.md">← Back to Triumph</a> · <a href="../PLAN.md">The plan</a> · <a href="research/README.md">Research</a> · <a href="design/README.md">Designs</a></p>
 
 ---
 
 Every outcome is a run in [runs.md](runs.md), reported as **fps · ms · draws · dropped**. Two runs of
-the same build differed by ~7 % (scene variance), so a gain smaller than that is only real when it
-was measured inside one run (`alt` switches, which flip on and off every 20 s).
+the same build differ by ~7 % (scene variance), so smaller gains count only when measured inside one
+run (`alt` switches, split into phases with `frames.py --alt`).
+
+*Last updated 2026-11-26 22:35.*
 
 ## Done
 
 | | task | outcome | evidence |
 |:--:|:--|:--|:--|
-| ✅ | **Refused compute pipelines** | 311 → 7 refused. The debug layer showed the shaders index the sampler heap, and an earlier "fix" had removed the flag allowing that. Draws 3,962 → 4,706, dropped ~478 → 344, at 3 % more frame time. | run 26 · `pipeline-samplers` `d1e1af34` |
-| ✅ | **`fsrQuality=4` black screen** | Fixed by the same change, since its passes were among the refused pipelines. It renders now but measures no gain yet (the GPU isn't the wall). | run 27 · capture `fsr4-fixed-211141.png` |
-| ✅ | **Shader census** | 25,636 of 25,694 programs emit DXIL (99.77 %). The 58 left, by reason: 40 descriptor chosen by control flow, 10 hardware SGPR input, 5 descriptor read as data, 3 lane masks. | `victory translate` over the full archive |
-| ✅ | **Wave64 on 32-lane cards (part 1)** | 1 of the 7 refused wave64 shaders now runs at wave32 (pipeline created on the card). The other 6 need lanes to meet inside branches. | `wave64-split` `ace7a91f`, 221 shader tests pass |
-| ✅ | **Decoder fix from the RDNA3 reference fork PR #6** | Operandless VOP1 and the EXEC destination of VOP3 CMPX are decoded (ported with credit). | `wave64-split` `3edc3e67` |
-| ✅ | **AVX2 build (`target-cpu=native`)** | 7.9 fps · 127.0 ms · 4,839 draws against 7.3 · 136.6 · 4,706. Within run-to-run variance, so not yet proven. | run A |
-| ✅ | **Copy-back piece cut underflow** | Found by a new test: a copy starting mid-piece could skip a thread's range in release builds. Fixed. | `fast-integ` `c8318f37` |
-| ✅ | **Test suite builds again** | One wrong module path had kept `victory-gpu`'s tests from compiling. Four tests in untouched files fail and are noted. | `c8318f37` |
-| ❌ | **Copy-back reguard** (`VICTORY_BACK_REGUARD`) | Inert: copy-back writes to write-watched memory, not guarded memory, so 0 blocks were kept. Needs rework for write watch. | run B |
-| ✅ | **README, CLAUDE.md, runs.md** | Rebuilt around the measured frame account; corrections recorded. | `main` |
+| ✅ | **Refused compute pipelines** | 311 → 7 refused (6 with the wave64 fix). The debug layer showed the shaders index the sampler heap, and an earlier "fix" had removed the flag allowing that. Draws 3,962 → ~4,800, dropped ~478 → ~345. | run 26 · `pipeline-samplers` `d1e1af34` |
+| ✅ | **`fsrQuality=4` black screen** | Fixed by the same change; renders now, no gain yet (the GPU isn't the wall). | run 27 |
+| ✅ | **Shader census** | 25,636 / 25,694 programs emit DXIL (99.77 %). The 58 left: 40 descriptor chosen by control flow, 10 hardware SGPR input, 5 descriptor read as data, 3 lane masks. | full-archive `victory translate` |
+| ✅ | **Wave64 on 32-lane cards, part 1** | 1 of the 7 refused wave64 shaders runs at wave32; **confirmed in-game (refusals 7 → 6)**. | `wave64-split` `ace7a91f` |
+| ✅ | **Decoder fix from the RDNA3 reference fork's PR #6** | Operandless VOP1 and the EXEC destination of VOP3 CMPX are decoded (ported with credit). | `3edc3e67` |
+| ✅ | **AVX2 + LTO build** | 7.9 fps · 127.0 ms · 4,839 draws against 7.3 · 136.6 · 4,706. Inside run-to-run noise, so not proven. | run A |
+| ✅ | **Copy-back piece-cut underflow** | Found by a new test: a copy starting mid-piece could skip a thread's range in release builds. Fixed. | `c8318f37` |
+| ✅ | **GPU event markers** | Every draw and dispatch named by shader hash, our own work labelled (`VICTORY_MARKERS=1`). Review caught that names would show as single letters (ANSI flag); fixed. | `6b34f897` + `b0d0e6e1` |
+| ✅ | **Capture trigger** | `VICTORY_CAPTURE_TOOL=renderdoc\|pix`, `VICTORY_CAPTURE_AT=<frame>` or F11. | `120ea8e4` |
+| ✅ | **Copy-back thread pool and fewer card waits** | Built; review clean; await measurement. | `a8e38b30`, `7d68f32b` |
+| ✅ | **`memory()` fault-store branch** | Only lanes with a missing page store the fault record. Review clean; awaits measurement. | `memory-fault` |
+| ✅ | **Shader-stub floor switch** | Pixel and compute shaders emptied for a GPU-floor measurement. Review: thread count must match the real shader (fix in progress). | `55749403` |
+| ✅ | **Copy-back write-watch rewatch** | Race-safe reset after our own write-back. Review: needs its own switch (fix in progress). | `dfe7d933` |
+| ✅ | **`frames.py --alt`** | Splits an `alt` run into on/off phases with a per-cycle verdict. | `scripts/measure/frames.py` |
+| ✅ | **Game folder renamed**, references fixed | Neutral path; config resolves. | local |
+| ✅ | **Docs**: README, plan, tooling, credits, 15 research reports, 12 designs | Published. | `main` |
+| ✅ | **Local backups** | Full git bundle (202 refs) verified; repeats every 30 min and after every run. | `D:\triumph\Backups` |
+| ❌ | **Copy-back reguard for guarded memory** (`VICTORY_BACK_REGUARD`) | Inert: copy-back writes write-watched memory. Replaced by the rewatch above. | run B |
 
-## In progress
+## Measured, awaiting confirmation
+
+| | switch | result |
+|:--:|:--|:--|
+| 🟡 | **`VICTORY_ASYNC_PRESENT`** | **~11 % faster in-run**: on 144.1 ms against off 154.4 ms at the same draws (4,814 / 4,829), ratio 0.890 over 7 cycles. The machine was CPU-starved during the run without compilers (remote desktop suspected), so one quiet confirmation comes before the launcher. |
+
+## In progress (agents)
 
 | | task | state |
 |:--:|:--|:--|
-| 🔄 | **`VICTORY_ASYNC_PRESENT`** | Overlaps the title's frame with our submission. It exists and has never been measured; the in-run A/B is next. Research estimate: 127 → ~75–85 ms. |
-| 🔄 | **Copy-back thread pool** (`VICTORY_BACK_POOL`) | Built and test passes; awaiting a run. |
-| 🔄 | **One fetch per settle** (`VICTORY_BACK_FEWER_WAITS`) | Built; awaiting a run. Removes ~5 card waits a frame (12.4 ms measured in those waits). |
-| 🔄 | **GPU event markers** (`VICTORY_MARKERS`) | Being written: every draw named by shader hash in PIX and RenderDoc. |
-| 🔄 | **Capture trigger** (`VICTORY_CAPTURE_TOOL`) | Being written: RenderDoc or PIX capture of a chosen frame, or on F11. |
+| 🔄 | **Zero-copy step 1**: no copy-back except an allowlist | building |
+| 🔄 | **40 "descriptor chosen by control flow"** refusals | building |
+| 🔄 | **The other 18 refusals** + a shader-coverage progress page | building |
+| 🔄 | **Wave64 multi-wave groups** (the 3 hardest) | building |
+| 🔄 | **Rendering fixes**: the red blocks; format, sampling and BC-decode audit | building |
+| 🔄 | **Ray-tracing correctness**: BVH intersection vs the ISA, builder wiring, RT refusals | building |
+| 🔄 | **DLSS plugin, stage 1**: FidelityFX call trace, user-supplied DLL loader, evaluate scaffold | building |
+| 🔄 | **Pipelining stage 1 + copy-back compare-and-swap** | building |
+| 🔄 | **Green test suite + CI** | 3 of 4 failing tests fixed (they were wrong tests); 4th in progress |
+| 🔄 | **Review fixes**: stub thread count, rewatch switch | building |
 
 ## Next
 
 | order | task | why |
 |:--:|:--|:--|
-| 1 | Zero-copy step 1: no copy-back except an allowlist | 96 % of copied-back bytes are never read by the title. −35 to −40 ms estimated. |
-| 2 | `fsrQuality` 1–4 GPU-time sweep, and the shader-stub floor run | Says how much of the card's time is pixels and how much is our structure. |
-| 3 | Title settings and frame caps, one per run | The only lever that removes work rather than speeding it up. |
-| 4 | Remaining 6 wave64 shaders and 58 refusals | The rest of the dropped draws. |
-| 5 | Warm shader cache, preload the working set | Load time and stutter. |
-| 6 | DirectStorage to the card; the red block artefacts | Picture quality and a few ms. |
-| 7 | DLSS, native wave ops, Frame Generation | After the GPU is the wall. |
-| 8 | Debug menu | After a stable 30 fps. |
+| 1 | Quiet confirmation of `ASYNC_PRESENT`; find what starves the CPU during runs | first runtime win, and fair measurements |
+| 2 | Measure: copy-back pool, fewer waits, rewatch, `GATHER_BY_COPY`, `memory()` branch | built and reviewed |
+| 3 | PIX timing + RenderDoc red-block captures (markers on) | per-pass GPU time; texture or shader bug? |
+| 4 | Stub floor run; reported 1080p output; `fsrQuality` sweep | how much of the GPU is pixels |
+| 5 | Zero-copy step 1 measurement | the biggest expected win (−35 to −40 ms) |
+| 6 | Pipelining stages 2–3 | overlap frames safely |
+| 7 | RT track B, indirect-overhead stages, GPU textures | GPU-side cuts |
+| 8 | DLSS test with a user-supplied DLL; Frame Generation; developer menu | after stable 30 |
