@@ -4,9 +4,14 @@
 from 3.4 frames a second to a number worth playing.</b></p>
 
 <p align="center">
-  7.7 fps · 130 ms a frame · 4,710 draws a frame &nbsp;|&nbsp;
-  25,586 / 25,694 shaders translate &nbsp;|&nbsp;
-  target 30 fps
+  <b>7.7 fps</b> · 130 ms a frame · 4,710 draws a frame &nbsp;|&nbsp;
+  <b>25,586 / 25,694</b> shaders translate &nbsp;|&nbsp;
+  target <b>30 fps</b>
+</p>
+
+<p align="center">
+  ✅ works &nbsp; ❌ broken or rejected &nbsp; ⚠️ partial &nbsp; 🔄 in progress &nbsp; ⏳ not started
+  &nbsp;·&nbsp; 🟢 high confidence &nbsp; 🟡 medium &nbsp; 🔴 low
 </p>
 
 ---
