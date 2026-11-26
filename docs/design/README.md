@@ -12,6 +12,10 @@ begins.
 
 | | design | what it changes | expected | effort | status |
 |:--:|:--|:--|:--|:--|:--:|
+| 🧠 | [**Card-authoritative memory**](card-authoritative.md) | The card's copy is the master; CPU pages fault in on first touch | est. −6 to −14 ms first stage; programme −40 to −90 | weeks | 🔄 building |
+| 🎞️ | [**Frame generation**](framegen.md) | Steady presenter, then open-source interpolation; optional user-supplied DLSS-FG | displayed fps only, once real fps ≥ ~16 | weeks | 🔄 presenter built |
+| 🧷 | [**Bindless and pass replay**](bindless.md) | Buffer pull-model, draw runs, per-pass replay (gated on a measured hit rate) | est. 0–3 ms now, 7–22 ms per recorder near 33 ms | weeks | ⏳ tool built |
+| ⚙️ | [**Async compute**](async-compute.md) | The title's compute queue on its own host queue | est. −3 to −8 ms card, 0 while CPU-bound | weeks | ⏳ deferred |
 | 🧮 | [**Card time budget**](card-budget.md) | Where the card's ~80 ms a frame goes and how to cut it | wide card hash est. −24 to −30 ms card; clamp/barrier batching −6 to −12 | days–weeks | 🔄 building |
 | 🧵 | [**Splitting the submit thread**](submit-split.md) | Present ticket, wide prepare, send thread, list digests | est. −30 to −60 ms submit combined (overlapping) | days | 🔄 building |
 | 🧾 | [**Recording cost**](recording-cost.md) | Recorder locks, dedupe bugs, bind elision, constant buffers in place (port 5) | est. −8 to −15 ms in the control | days | 🔄 building |

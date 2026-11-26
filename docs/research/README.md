@@ -15,6 +15,7 @@ disagree, the disagreement is listed below rather than smoothed over.
 
 | | report | question it answers | headline |
 |:--:|:--|:--|:--|
+| 🧭 | [**Why fixes miss their estimates**](results-gap.md) | Why did changes estimated at 10–40 ms measure neutral? | The frame is a closed loop (submit ↔ card ↔ relay); cutting one stage turns into idle elsewhere. Only dependency-breaking changes move the frame; judge on per-component counters. |
 | 🧭 | [**Coherency prior art**](coherency-prior-art.md) | How do other emulators keep CPU and GPU memory in step without stalls? | GPU-side copies for GPU-written sources; per-buffer GPU-modified range lists instead of hashing; lazy readback; ReBAR upload heaps. |
 | 🧭 | [**Native paths, deeper**](native-paths-2.md) | Would running more natively (HLE, recompiling, asset conversion) win big? | CPU code is already native, so recompiling gains ~0; the big lever is card-authoritative memory (est. 40–90 ms, weeks). |
 | 🧭 | [**GPU-driven commands**](gpu-driven.md) | Can the card or new APIs take the command work off the CPU? | Most cost is translation work around calls (~3.3 µs/call), not the calls; parallel/pipelined translation and bindless lead; Vulkan not worth a port. |

@@ -47,7 +47,7 @@ diagnostics build, confirmed launch settings.
 
 | | now | target |
 |:--|:--|:--|
-| **Frame rate** | **7.9 fps · 127 ms** median, 8.8 fps best | 30 fps |
+| **Frame rate** | **8.2 fps · 121 ms** median (run 49, with wide card hashing), 9.1 fps best | 30 fps |
 | **Scene drawn** | **~4,800 draws** a frame, ~360 dropped | 0 dropped |
 | **Shaders** | **25,694 / 25,694** translate (**100 %**) | ✅ |
 | **Pipelines refused** | **7** (was 311) | 0 |
