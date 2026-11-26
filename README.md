@@ -19,6 +19,7 @@ and the work of getting its world to 30 frames a second.</b></p>
 
 <table align="center">
   <tr>
+    <td align="center"><a href="PLAN.md"><b>🗺️ The plan</b></a><br><sub>phases, gates, live log</sub></td>
     <td align="center"><a href="docs/tasks.md"><b>✅ Task log</b></a><br><sub>what's done, and what it measured</sub></td>
     <td align="center"><a href="docs/research/README.md"><b>🔬 Research</b></a><br><sub>the path to 30, 60 and 120</sub></td>
     <td align="center"><a href="docs/design/README.md"><b>📐 Designs</b></a><br><sub>plans for the big changes</sub></td>
