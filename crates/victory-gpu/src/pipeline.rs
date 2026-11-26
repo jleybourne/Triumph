@@ -9,6 +9,21 @@
 //! containers are shared by content hash and translated once, on first
 //! use (decision 0003).
 //!
+//! ## Pipeline loading and dropped draws
+//!
+//! Pipelines that are still loading (from the library) cause draws to be
+//! dropped in `draw.rs` when `host_pipeline()` returns `None`. Delaying
+//! these draws until the next frame is not feasible: the D3D12 command list
+//! is recorded in real-time with interleaved state changes, and there's no
+//! mechanism to capture, queue, and replay individual draw calls without
+//! their full state context. Implementing replay would require a second-level
+//! command buffer throughout the draw recording system (`draw.rs`, `queue.rs`).
+//!
+//! The solution (`VICTORY_EARLY_WORLD=1`): start ALL pipelines at creation
+//! time, not just those from the previous run's early list. This ensures
+//! world scene pipelines are being loaded during loading screens, not when
+//! the scene first needs them. See `make::early()`.
+//!
 //! shortcut: only vertex plus pixel pipelines from streams and compute
 //! pipelines get host pipelines; mesh, tessellation and geometry stages,
 //! and the plain graphics description, keep their containers only. The 32-byte
