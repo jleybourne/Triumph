@@ -40,3 +40,4 @@ Rows are never removed. A rejection is a result: it stops the same idea being pa
 
 | 17 | `VICTORY_REFRESH_COARSE=1` (coarser change detection) | 4,466 | 7.0 | 149.1 | 348 | — | **10,980-11,389 / 192-213 MB** | — | ❌ fails its own test: count falls 4% while bytes rise 70-85% — copying padding, not less work |
 | 18 | draw census (`VICTORY_DRAW_CENSUS=1`) | 5,221 | 6.1 | 163.3 | 348 | — | — | — | ❌ the census printed `0 (0.00x)` for every counter — it was never hooked to the real call sites; the real barrier count (706 a frame) came from the copystat line |
+| 19 | `VICTORY_XMEM_COMMIT=1 VICTORY_INPLACE=2 VICTORY_INPLACE_MORE=1` (page pool as SEC_COMMIT + zero-copy) | ~4,500 | **7.5** | **133.4** | ~345 | — | **50.0 ms / 123.7 MB** | — | ✅ **the first measured improvement**: median full frame 133.4 against 145.9, best frame 8.2 fps / 121.8 ms, copies block 75.4 → 50.0 ms at the same draw count |
