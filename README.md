@@ -9,17 +9,12 @@ from 3.4 frames a second to a number worth playing.</b></p>
   &nbsp;|&nbsp; 🎯 target <b>30 fps</b> &nbsp;|&nbsp; 🟢 host work &nbsp; 🔴 GPU per-draw is the barrier
 </p>
 
-<table align="center">
-  <tr><th>mark</th><th>means</th><th></th><th>mark</th><th>means</th></tr>
-  <tr><td align="center">✅</td><td>works, measured</td>
-      <td align="center">🟢</td><td>high confidence</td></tr>
-  <tr><td align="center">❌</td><td>broken or rejected</td>
-      <td align="center">🟡</td><td>medium confidence</td></tr>
-  <tr><td align="center">⚠️</td><td>partial</td>
-      <td align="center">🔴</td><td>low confidence</td></tr>
-  <tr><td align="center">🔄</td><td>in progress</td>
-      <td align="center">⏳</td><td>not started</td></tr>
-</table>
+| mark | means | mark | means |
+|:--:|:--|:--:|:--|
+| ✅ | works, measured | 🟢 | high confidence |
+| ❌ | broken or rejected | 🟡 | medium confidence |
+| ⚠️ | partial | 🔴 | low confidence |
+| 🔄 | in progress | ⏳ | not started |
 
 ---
 
