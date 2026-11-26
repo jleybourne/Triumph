@@ -5,7 +5,7 @@ and the work of getting its world to 30 frames a second.</b></p>
 
 <p align="center">
   <img alt="frame rate" src="https://img.shields.io/badge/world-7.9%20fps%20·%20127%20ms-orange?style=for-the-badge">
-  <img alt="shaders" src="https://img.shields.io/badge/shaders-99.77%25-brightgreen?style=for-the-badge">
+  <img alt="shaders" src="https://img.shields.io/badge/shaders-100%25-brightgreen?style=for-the-badge">
   <img alt="refused pipelines" src="https://img.shields.io/badge/refused%20pipelines-7%20(was%20311)-brightgreen?style=for-the-badge">
   <img alt="target" src="https://img.shields.io/badge/target-30%20fps-blue?style=for-the-badge">
 </p>
@@ -49,7 +49,7 @@ diagnostics build, confirmed launch settings.
 |:--|:--|:--|
 | **Frame rate** | **7.9 fps · 127 ms** median, 8.8 fps best | 30 fps |
 | **Scene drawn** | **~4,800 draws** a frame, ~360 dropped | 0 dropped |
-| **Shaders** | **25,636 / 25,694** translate (99.77 %) | all |
+| **Shaders** | **25,694 / 25,694** translate (**100 %**) | ✅ |
 | **Pipelines refused** | **7** (was 311) | 0 |
 | **Crashes** | 0 in the measured runs | 0 |
 | **Resolution** | 2560×1440 scene, output 3840×2160 | lower scale + DLSS |

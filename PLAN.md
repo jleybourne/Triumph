@@ -75,7 +75,7 @@ Updated every 30 minutes while work is running. The latest entry is at the botto
 
 | | step | status |
 |:--:|:--|:--:|
-| 4.1 | The last 58 untranslated programs | ✅ all 58 fixed across `descriptor-phi` (40) and `shader-rest` (18); 100 % pending a merged census |
+| 4.1 | The last 58 untranslated programs | ✅ **100 %: 25,694 / 25,694 programs translate** (own census on the merged build) |
 | 4.2 | The 7 refused wave64 pipelines | ✅ 3 fixed, 🧪 3 to test in-game, ❌ 1 impossible exactly on 32-lane cards (needs all 32 KB of LDS) |
 | 4.3 | Rendering bugs: the red blocks, format and sampling audit | 🔄 agent |
 | 4.4 | Ray-tracing correctness: BVH intersection against the ISA, builder wiring | 🔄 agent |
@@ -118,3 +118,4 @@ Updated every 30 minutes while work is running. The latest entry is at the botto
 | 2026-11-26 23:15 | **Shaders:** all 58 census refusals fixed across two branches (100 % expected once merged and re-counted); wave64: 3 of 7 fixed, 3 to test, 1 impossible. **Built and merged into the test build:** zero-copy step 1, UI-plane compositor, DLSS plugin stage 1 (NVIDIA-signed DLL ready), pipelining stage 1 + copy-back CAS, console profiles, RT correctness, green test suite. **Running:** zero-copy step 1 in-run A/B with UI-plane and upscaler logging. New designs: UI planes, saves, main menu, launcher; research: console techniques. |
 | 2026-11-26 23:50 | Runs 28–31: ASYNC_PRESENT promoted to the launcher (baseline 7.3 fps · 136.4 ms · 4,960 draws); GATHER_BY_COPY rejected (neutral); zero-copy step 1 engaged only with the relay off (picture intact, ~600 MB skipped) and is now fixed to work with the relay (`uma-relay` 8a418757: two real data hazards found and fixed, command-processor keep narrowed); the copy-back trio crashed the title (REWATCH suspected, bisecting). Pipelining stages 2–3 committed. Owner granted autonomous work toward 30 fps. |
 | 2026-11-27 00:10 | Runs 32–33: REWATCH confirmed as the crash; FEWER_WAITS+POOL no gain. **Zero-copy step 1 works with the relay** (copy-back −38 ms, uploads halved, no visual damage) but its owned-range comparison added ~48 ms to preparing, so the frame went 136 → 173 ms; that cost is the next fix. Zero-copy step 2 (drop the GPU hash lists) started. Shader branches reconciled; agent reports 25,694/25,694, own census pending. |
+| 2026-11-27 00:45 | **Shader coverage 100 %** (25,694 / 25,694, verified). Control on the merged build: 7.2 fps · 138.0 ms · 4,729 draws. Zero-copy fully on: copy-back and card hashing fell as designed, but the submit thread spends ~100 ms more CPU in uninstrumented bookkeeping (196.9 ms); a profiler run comes next. Zero-copy step 2 and the read-fetch fix built. Batch of 6 runs in progress. |
