@@ -101,9 +101,11 @@ The launcher `D:\victory-work\scripts\run_play.ps1` is the confirmed set and not
    setting: it happens before any draw, with no `VICTORY_D3D12_DEBUG` set.
 1. **List calls: 20,293 a frame, 243.2 ms on one thread.** The other fork's `VICTORY_THIN` writes the
    calls down and translates them on 8 threads: 36,000 calls = 230 ms over 8 threads, 75 → 68 ms of
-   frame. Porting it needs `crates::cores::keep_many_on_fast_cores`, `queue::line_on`,
-   `queue::line_moved`, and a `boxed()` list constructor that this tree does not have — ten compile
-   errors when attempted; `crates/victory-gpu/src/list/thin.rs` is present but not declared.
+   frame. **Staged on branch `thin-port` (`95b07ede`), pushed to Triumph:** `list/thin.rs` (912 lines),
+   `queue/behind.rs` (1,086) and `cores.rs` (107) are in place but *not declared*, so that branch builds
+   exactly as `main`. `docs/thin-port.md` on that branch is the brief — the five steps left (declare the
+   modules, the four `queue` helpers, extract `list::boxed()`, drop the host list when thin, then fix
+   what `thin.rs` assumes), the measurement commands, and the traps. Start there, not from the fork.
 2. **The upscaler.** The title's FSR passes call device method 0x218; with `VICTORY_PRECOMPILED=1` they
    are made from the containers (log: `calls=1,2,3,4,8`), but the path is 4× more expensive per draw.
    `fsrQuality` 4 never presents a picture. The internal render scale is otherwise unreachable: the
@@ -153,6 +155,20 @@ then reads the **stale** log — this has caused three false conclusions. Confir
 the log timestamp is new before trusting a number.
 
 World load takes 2-4 minutes; a 300 s run never reaches steady state. Use 600 s minimum.
+
+## Paths, and the move that broke them
+
+Everything below was written when the work lived at `D:\victory-work`. On 2026-11-26 something moved
+that directory to `D:\triumph\victory-work` mid-session, which broke every script path and left the git
+worktrees pointing at a directory that no longer existed. It was restored as a **junction**:
+
+```
+D:\victory-work  <->  D:\triumph\victory-work
+```
+
+Both paths work. If a script or a worktree ever reports "No such file or directory" for a `victory-work`
+path, check the junction first (`dir D:\ | findstr victory-work`) before assuming anything is lost —
+`git worktree prune` clears the stale registrations afterwards.
 
 ## Rules that have cost time when broken
 
