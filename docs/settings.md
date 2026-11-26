@@ -33,9 +33,13 @@ reports.
 
 | change | result |
 |---|---|
+| `fsrQuality` 2 → 3 | **works, and is the best setting found.** 130.2 ms / 7.70 fps median at 3,894 draws, best 112.2 ms / 8.90 fps (baseline 131.3 / 7.6, best 117.5 / 8.5). Picture confirmed by capture. |
 | `fsrQuality` 2 → 4 | **black screen.** Reverted. The title's FSR path does not produce a picture at that level here. |
-| `vrsEnabled` false → true | game runs normally (3,908 draws, 135.3 ms) but **`0` shading-rate calls in the log**: the title never asks for a variable rate on this profile, so the setting is inert. |
+| `vrsEnabled` false → true | game runs normally (3,908 draws, 148.3 ms median, 6.75 fps) but **`0` shading-rate calls in the log**: the title never asks for a variable rate on this profile, so the setting is inert and measurably worse in that run. |
 | `fsrQuality` 2 (original) | 7.6 fps median · 131.3 ms at ~4,500 draws — the baseline in `runs.md` |
+
+The working setting is `fsrQuality=3`; level 4 has not been diagnosed beyond "the picture never
+arrives", and it is the one value that must not be left in the file.
 
 ## Rules for changing it
 
